@@ -1,0 +1,17 @@
+name = "speaking-practice"
+compatibility_date = "2024-09-23"
+pages_build_output_dir = "public"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "speaking_practice_db"
+database_id = "4d2177bf-8c1d-4365-8a83-d33beda31467"
+
+[ai]
+binding = "AI"
+
+# TEACHER_PASSWORD is read from env.TEACHER_PASSWORD at runtime.
+# Do NOT put the real password here — this file is committed to git.
+# Set it as a secret instead (see README.md), either via:
+#   wrangler pages secret put TEACHER_PASSWORD
+# or the Cloudflare dashboard: Pages project -> Settings -> Environment variables.

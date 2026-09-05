@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Speaking Practice</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink: '#1E2823',
+          surface: '#26332C',
+          surfaceRaised: '#2E3D35',
+          paper: '#F3EFE4',
+          muted: '#93A69B',
+          gold: '#D9A544',
+          record: '#D8483F'
+        },
+        fontFamily: {
+          serif: ['Fraunces', 'serif'],
+          sans: ['Inter', 'sans-serif']
+        }
+      }
+    }
+  };
+</script>
+<style>
+  @keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.75); } }
+  .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { animation: spin 0.8s linear infinite; }
+</style>
+</head>
+<body class="bg-ink text-paper font-sans min-h-screen">
+<div class="max-w-xl mx-auto px-6 py-14" id="app">
+  <p class="text-muted text-sm">Loading…</p>
+</div>
+
+<script>
+const state = {
+  phase: 'loading', // loading | idle | recording | transcribing | feedbacking | done | feedback-error | no-speech | limit-reached | mic-denied | error | unsupported
+  question: null,
+  transcript: '',
+  aiFeedback: '',
+  submissions: [],
+  todayCount: 0,
+  dailyLimit: 3,
+  recordingSeconds: 0,
+  errorMessage: ''
+};
+
+let mediaRecorder = null;
+let audioChunks = [];
+let micStream = null;
+let timerHandle = null;
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : str;
+  return div.innerHTML;
+}
+
+function formatTime(sec) {
+  const m = Math.floor(sec / 60).toString().padStart(2, '0');
+  const s = Math.floor(sec % 60).toString().padStart(2, '0');
+  return m + ':' + s;
+}
+
+function formatDate(iso) {
+  const d = new Date(iso + 'Z'); // created_at is stored as UTC by SQLite
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' · ' +
+         d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+async function loadInitial() {
+  try {
+    const [subsRes, qRes] = await Promise.all([
+      fetch('/api/submissions'),
+      fetch('/api/questions?next=1')
+    ]);
+    const subsData = await subsRes.json();
+    state.submissions = subsData.submissions || [];
+    state.todayCount = subsData.todayCount || 0;
+    state.dailyLimit = subsData.dailyLimit || 3;
+
+    if (qRes.ok) {
+      const qData = await qRes.json();
+      state.question = qData.question;
+    }
+
+    state.phase = state.todayCount >= state.dailyLimit ? 'limit-reached' : 'idle';
+  } catch (err) {
+    state.phase = 'error';
+    state.errorMessage = "Couldn't load the page. Check your connection and refresh.";
+  }
+  render();
+}
+
+async function pickNewQuestion() {
+  try {
+    const res = await fetch('/api/questions?next=1');
+    if (res.ok) {
+      const data = await res.json();
+      state.question = data.question;
+    }
+  } catch (err) { /* keep the current question if this fails */ }
+  state.phase = state.todayCount >= state.dailyLimit ? 'limit-reached' : 'idle';
+  state.transcript = '';
+  state.aiFeedback = '';
+  render();
+}
+
+function getSupportedMimeType() {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+  for (const c of candidates) {
+    if (MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return '';
+}
+
+async function startRecording() {
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    state.phase = 'unsupported';
+    render();
+    return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    state.phase = 'mic-denied';
+    render();
+    return;
+  }
+
+  const mimeType = getSupportedMimeType();
+  mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType } : undefined);
+  audioChunks = [];
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder.onstop = handleRecordingStop;
+  mediaRecorder.start();
+
+  state.phase = 'recording';
+  state.recordingSeconds = 0;
+  startTimer();
+  render();
+}
+
+function stopRecording() {
+  stopTimer();
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+}
+
+function startTimer() {
+  timerHandle = setInterval(() => {
+    state.recordingSeconds += 1;
+    const el = document.getElementById('rec-timer');
+    if (el) el.textContent = formatTime(state.recordingSeconds);
+  }, 1000);
+}
+function stopTimer() {
+  if (timerHandle) clearInterval(timerHandle);
+  timerHandle = null;
+}
+
+async function handleRecordingStop() {
+  const blob = new Blob(audioChunks, { type: (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm' });
+  audioChunks = [];
+
+  if (blob.size < 500) {
+    state.phase = 'no-speech';
+    render();
+    return;
+  }
+
+  state.phase = 'transcribing';
+  render();
+
+  const formData = new FormData();
+  formData.append('audio', blob, 'recording.webm');
+
+  try {
+    const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok || !data.text) {
+      state.phase = 'no-speech';
+      render();
+      return;
+    }
+    state.transcript = data.text;
+    await getFeedback();
+  } catch (err) {
+    state.phase = 'error';
+    state.errorMessage = 'Transcription failed. Please check your connection and try again.';
+    render();
+  }
+}
+
+async function getFeedback() {
+  state.phase = 'feedbacking';
+  render();
+  try {
+    const res = await fetch('/api/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: state.question.prompt, transcript: state.transcript })
+    });
+    const data = await res.json();
+    state.aiFeedback = res.ok ? (data.feedback || '') : '';
+  } catch (err) {
+    state.aiFeedback = '';
+  }
+  await saveSubmission();
+}
+
+async function saveSubmission() {
+  try {
+    const res = await fetch('/api/submissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        questionId: state.question.id,
+        transcript: state.transcript,
+        aiFeedback: state.aiFeedback
+      })
+    });
+    const data = await res.json();
+
+    if (res.status === 429) {
+      state.todayCount = data.todayCount ?? state.todayCount;
+      state.dailyLimit = data.dailyLimit ?? state.dailyLimit;
+      state.phase = 'limit-reached';
+      render();
+      return;
+    }
+    if (!res.ok) {
+      state.phase = 'error';
+      state.errorMessage = 'Could not save your answer. Please try again.';
+      render();
+      return;
+    }
+
+    state.todayCount = data.todayCount;
+    state.dailyLimit = data.dailyLimit;
+    state.phase = state.aiFeedback ? 'done' : 'feedback-error';
+    await refreshHistory();
+    render();
+  } catch (err) {
+    state.phase = 'error';
+    state.errorMessage = 'Could not save your answer. Check your connection.';
+    render();
+  }
+}
+
+async function refreshHistory() {
+  try {
+    const res = await fetch('/api/submissions');
+    const data = await res.json();
+    state.submissions = data.submissions || [];
+  } catch (err) { /* keep showing whatever we already had */ }
+}
+
+function practiceAnother() {
+  state.transcript = '';
+  state.aiFeedback = '';
+  pickNewQuestion();
+}
+
+function render() {
+  const app = document.getElementById('app');
+  let html = '';
+
+  const questionBlock = (dim) =>
+    `<div class="font-serif text-3xl sm:text-4xl leading-tight mb-9 ${dim ? 'opacity-50' : ''}">${escapeHtml(state.question ? state.question.prompt : '')}</div>`;
+
+  const limitLine = `<p class="text-muted text-sm mt-3">${state.todayCount} of ${state.dailyLimit} questions today</p>`;
+
+  if (state.phase === 'loading') {
+    html = `<p class="text-muted text-sm">Loading…</p>`;
+  } else if (state.phase === 'error') {
+    html = `<div class="text-paper text-base leading-relaxed"><strong class="text-record">Something went wrong.</strong><br>${escapeHtml(state.errorMessage)}</div>
+      <button class="mt-6 border border-white/15 hover:border-gold rounded-full px-6 py-3 text-sm font-medium" onclick="location.reload()">Reload</button>`;
+  } else if (state.phase === 'unsupported') {
+    html = questionBlock(true) +
+      `<div class="text-base leading-relaxed"><strong class="text-record">Recording isn't supported in this browser.</strong><br>Please open this page in a recent version of Chrome, Edge, or Safari.</div>`;
+  } else if (state.phase === 'mic-denied') {
+    html = questionBlock(true) +
+      `<div class="text-base leading-relaxed"><strong class="text-record">Microphone access is blocked.</strong><br>Check this site's permissions in your browser settings and allow the microphone, then try again.</div>
+      <button class="mt-6 border border-white/15 hover:border-gold rounded-full px-6 py-3 text-sm font-medium" onclick="location.reload()">Try again</button>`;
+  } else if (state.phase === 'limit-reached') {
+    html = questionBlock(true) +
+      `<div class="text-base leading-relaxed text-muted">You've used all your practice questions for today. Come back tomorrow!</div>` +
+      limitLine;
+  } else if (state.phase === 'idle') {
+    html = questionBlock(false) +
+      `<button class="text-muted text-sm underline underline-offset-2 hover:text-paper mb-8 block" onclick="pickNewQuestion()">Try a different question</button>
+      <button class="inline-flex items-center gap-3 bg-gold text-ink rounded-full px-7 py-4 font-semibold hover:scale-[1.02] active:scale-[0.98] transition" onclick="startRecording()">
+        <span class="w-2.5 h-2.5 rounded-full bg-current"></span>Start recording
+      </button>
+      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.</p>` +
+      limitLine;
+  } else if (state.phase === 'recording') {
+    html = questionBlock(true) +
+      `<div class="flex items-center gap-4">
+        <button class="inline-flex items-center gap-3 bg-record text-paper rounded-full px-7 py-4 font-semibold" onclick="stopRecording()">
+          <span class="w-2.5 h-2.5 rounded-full bg-current pulse-dot"></span>Stop recording
+        </button>
+        <span class="text-muted text-sm tabular-nums" id="rec-timer">00:00</span>
+      </div>`;
+  } else if (state.phase === 'transcribing' || state.phase === 'feedbacking') {
+    const label = state.phase === 'transcribing' ? 'Transcribing your answer…' : 'Getting your feedback…';
+    html = questionBlock(true) +
+      `<div class="flex items-center gap-3 text-muted text-sm border-t border-white/10 pt-5">
+        <span class="w-4 h-4 border-2 border-white/10 border-t-gold rounded-full spinner"></span>${label}
+      </div>`;
+  } else if (state.phase === 'no-speech') {
+    html = questionBlock(true) +
+      `<div class="text-base text-record">No speech was picked up. Try again, a little closer to the microphone.</div>
+      <button class="mt-6 border border-white/15 hover:border-gold rounded-full px-6 py-3 text-sm font-medium" onclick="state.phase='idle'; render();">Try again</button>`;
+  } else if (state.phase === 'done' || state.phase === 'feedback-error') {
+    html = questionBlock(true) +
+      `<div class="border-t border-white/10 pt-5">
+        <div class="text-muted text-xs mb-2">Your answer</div>
+        <div class="text-base leading-relaxed whitespace-pre-wrap">${escapeHtml(state.transcript)}</div>
+      </div>`;
+    if (state.phase === 'done') {
+      html += `<div class="border-t border-white/10 pt-5 mt-8">
+        <div class="text-muted text-xs mb-2">Feedback</div>
+        <div class="bg-surface rounded-xl px-5 py-4 text-base leading-relaxed whitespace-pre-wrap">${escapeHtml(state.aiFeedback)}</div>
+      </div>
+      <p class="text-muted text-sm mt-5">Saved. Your teacher may add a note here too — check back later.</p>`;
+    } else {
+      html += `<div class="mt-6 text-record text-sm">Feedback couldn't be generated right now, but your answer was saved. Your teacher can still review it.</div>`;
+    }
+    html += `<button class="mt-7 border border-white/15 hover:border-gold rounded-full px-6 py-3 text-sm font-medium" onclick="practiceAnother()">Practice another question</button>` +
+      limitLine;
+  }
+
+  html += historyBlock();
+  app.innerHTML = html;
+}
+
+function historyBlock() {
+  if (!state.submissions || state.submissions.length === 0) return '';
+  let html = `<div class="mt-16 pt-8 border-t border-white/10">
+    <div class="font-serif text-xl mb-6">Your past practice</div>`;
+
+  state.submissions.forEach((s) => {
+    const finalFeedback = s.teacher_feedback && s.teacher_feedback.trim() ? s.teacher_feedback : s.ai_feedback;
+    const isTeacherReviewed = !!(s.teacher_feedback && s.teacher_feedback.trim());
+
+    html += `<div class="py-5 border-t border-white/10 first:border-t-0 first:pt-0">
+      <div class="text-muted text-xs mb-1">${formatDate(s.created_at)}</div>
+      <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
+      <div class="text-sm leading-relaxed mb-3">${escapeHtml(s.transcript)}</div>`;
+
+    if (finalFeedback) {
+      html += `<div class="text-xs ${isTeacherReviewed ? 'text-gold' : 'text-muted'} mb-1">${isTeacherReviewed ? "Teacher's note" : 'AI feedback'}</div>
+        <div class="text-sm leading-relaxed ${isTeacherReviewed ? 'bg-surfaceRaised border-l-2 border-gold pl-4 py-2 rounded-r-lg' : 'bg-surface rounded-lg px-4 py-3'} whitespace-pre-wrap">${escapeHtml(finalFeedback)}</div>`;
+    } else {
+      html += `<div class="text-xs text-muted italic">Waiting for feedback</div>`;
+    }
+    html += `</div>`;
+  });
+
+  html += `</div>`;
+  return html;
+}
+
+loadInitial();
+</script>
+</body>
+</html>

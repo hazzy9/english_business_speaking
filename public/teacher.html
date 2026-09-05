@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Speaking Practice — Teacher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          ink: '#1E2823',
+          surface: '#26332C',
+          surfaceRaised: '#2E3D35',
+          paper: '#F3EFE4',
+          muted: '#93A69B',
+          gold: '#D9A544',
+          record: '#D8483F'
+        },
+        fontFamily: {
+          serif: ['Fraunces', 'serif'],
+          sans: ['Inter', 'sans-serif']
+        }
+      }
+    }
+  };
+</script>
+</head>
+<body class="bg-ink text-paper font-sans min-h-screen">
+<div class="max-w-3xl mx-auto px-6 py-14" id="app"></div>
+
+<script>
+const state = {
+  password: '',
+  questions: [],
+  categories: [],
+  activeCategory: 'General',
+  dailyLimit: 3,
+  submissions: [],
+  loaded: false,
+  authError: ''
+};
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : str;
+  return div.innerHTML;
+}
+
+function formatDate(iso) {
+  const d = new Date(iso + 'Z');
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' · ' +
+         d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json', 'X-Teacher-Password': state.password };
+}
+
+async function loadAll() {
+  const [qRes, sRes, subRes] = await Promise.all([
+    fetch('/api/questions'),
+    fetch('/api/settings'),
+    fetch('/api/submissions')
+  ]);
+  const qData = await qRes.json();
+  const sData = await sRes.json();
+  const subData = await subRes.json();
+
+  state.questions = qData.questions || [];
+  state.categories = sData.categories || [];
+  state.activeCategory = sData.activeCategory || 'General';
+  state.dailyLimit = sData.dailyLimit || 3;
+  state.submissions = subData.submissions || [];
+  state.loaded = true;
+  render();
+}
+
+function updatePassword(value) {
+  state.password = value;
+}
+
+async function addQuestion() {
+  const promptInput = document.getElementById('new-question-prompt');
+  const categoryInput = document.getElementById('new-question-category');
+  const prompt = promptInput.value.trim();
+  const category = categoryInput.value.trim() || 'General';
+  if (!prompt) return;
+
+  const res = await fetch('/api/questions', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ prompt, category })
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  promptInput.value = '';
+  await loadAll();
+}
+
+async function deleteQuestion(id) {
+  const res = await fetch('/api/questions?id=' + id, {
+    method: 'DELETE',
+    headers: { 'X-Teacher-Password': state.password }
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  await loadAll();
+}
+
+async function saveSettings() {
+  const categorySelect = document.getElementById('active-category-select');
+  const limitInput = document.getElementById('daily-limit-input');
+
+  const res = await fetch('/api/settings', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      activeCategory: categorySelect.value,
+      dailyLimit: Number(limitInput.value)
+    })
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  await loadAll();
+}
+
+async function saveFeedback(id) {
+  const textarea = document.getElementById('fb-' + id);
+  const btn = document.getElementById('btn-' + id);
+  const text = textarea.value.trim();
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  const res = await fetch('/api/submissions', {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify({ id, teacherFeedback: text })
+  });
+
+  if (res.status === 401) {
+    state.authError = 'Incorrect teacher password.';
+    btn.disabled = false;
+    btn.textContent = 'Save feedback';
+    render();
+    return;
+  }
+  state.authError = '';
+  await loadAll();
+}
+
+function render() {
+  const app = document.getElementById('app');
+
+  if (!state.loaded) {
+    app.innerHTML = `<p class="text-muted text-sm">Loading…</p>`;
+    return;
+  }
+
+  let html = `
+    <div class="font-serif text-3xl mb-1">Practice sessions</div>
+    <p class="text-muted text-sm mb-8">Manage questions, set the limit, and review her answers.</p>
+
+    <div class="mb-10">
+      <label class="text-muted text-xs block mb-2">Teacher password</label>
+      <input type="password" placeholder="Enter password to make changes" value="${escapeHtml(state.password)}"
+        oninput="updatePassword(this.value)"
+        class="w-full bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm" />
+      ${state.authError ? `<p class="text-record text-sm mt-2">${escapeHtml(state.authError)}</p>` : ''}
+    </div>
+
+    <div class="border-t border-white/10 pt-8 mb-10">
+      <div class="font-serif text-xl mb-4">Question sets</div>
+      <div class="flex flex-wrap gap-3 mb-4">
+        <input id="new-question-prompt" type="text" placeholder="New question…"
+          class="flex-1 min-w-[200px] bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm" />
+        <input id="new-question-category" type="text" placeholder="Category (e.g. Business)"
+          class="w-48 bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm" />
+        <button onclick="addQuestion()" class="bg-gold text-ink rounded-lg px-5 py-2.5 text-sm font-semibold">Add</button>
+      </div>
+      <div class="space-y-1">`;
+
+  const grouped = {};
+  state.questions.forEach((q) => {
+    grouped[q.category] = grouped[q.category] || [];
+    grouped[q.category].push(q);
+  });
+
+  if (state.questions.length === 0) {
+    html += `<p class="text-muted text-sm">No questions yet — add one above.</p>`;
+  } else {
+    Object.keys(grouped).sort().forEach((cat) => {
+      html += `<div class="text-muted text-xs mt-4 mb-1">${escapeHtml(cat)}${cat === state.activeCategory ? ' <span class="text-gold">· active</span>' : ''}</div>`;
+      grouped[cat].forEach((q) => {
+        html += `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-white/5">
+          <span class="text-sm">${escapeHtml(q.prompt)}</span>
+          <button onclick="deleteQuestion(${q.id})" class="text-muted hover:text-record text-xs shrink-0">Delete</button>
+        </div>`;
+      });
+    });
+  }
+
+  html += `</div></div>
+
+    <div class="border-t border-white/10 pt-8 mb-10">
+      <div class="font-serif text-xl mb-4">Settings</div>
+      <div class="flex flex-wrap gap-4 items-end">
+        <div>
+          <label class="text-muted text-xs block mb-2">Active category</label>
+          <select id="active-category-select" class="bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm">
+            ${state.categories.map((c) => `<option value="${escapeHtml(c)}" ${c === state.activeCategory ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label class="text-muted text-xs block mb-2">Daily question limit</label>
+          <input id="daily-limit-input" type="number" min="1" value="${state.dailyLimit}"
+            class="w-28 bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm" />
+        </div>
+        <button onclick="saveSettings()" class="bg-gold text-ink rounded-lg px-5 py-2.5 text-sm font-semibold">Save settings</button>
+      </div>
+    </div>
+
+    <div class="border-t border-white/10 pt-8">
+      <div class="font-serif text-xl mb-4">Submissions</div>`;
+
+  if (state.submissions.length === 0) {
+    html += `<p class="text-muted text-sm">No practice sessions yet. Once she records an answer, it'll show up here.</p>`;
+  } else {
+    state.submissions.forEach((s) => {
+      html += `<div class="py-5 border-t border-white/10 first:border-t-0 first:pt-0">
+        <div class="text-muted text-xs mb-1">${formatDate(s.created_at)} · ${escapeHtml(s.question_category)}</div>
+        <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
+        <div class="text-sm leading-relaxed mb-3">${escapeHtml(s.transcript)}</div>
+        ${s.ai_feedback ? `<div class="text-muted text-xs mb-1">AI feedback</div>
+        <div class="bg-surface rounded-lg px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap mb-3">${escapeHtml(s.ai_feedback)}</div>` : ''}
+        <label class="text-muted text-xs block mb-1">Your feedback ${s.teacher_feedback ? '<span class="text-gold">· saved</span>' : ''}</label>
+        <textarea id="fb-${s.id}" placeholder="Write your feedback for her here…"
+          class="w-full bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm min-h-[80px] mb-2">${escapeHtml(s.teacher_feedback || '')}</textarea>
+        <button id="btn-${s.id}" onclick="saveFeedback(${s.id})" class="bg-gold text-ink rounded-lg px-5 py-2 text-sm font-semibold">${s.teacher_feedback ? 'Update feedback' : 'Save feedback'}</button>
+      </div>`;
+    });
+  }
+
+  html += `</div>`;
+  app.innerHTML = html;
+}
+
+loadAll();
+</script>
+</body>
+</html>
