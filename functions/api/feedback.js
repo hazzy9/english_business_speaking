@@ -25,7 +25,7 @@ export async function onRequestPost(context) {
   Keep it under 150 words, warm in tone, and easy to read. No markdown headers — short lines or a few bullet points only.`;
   
     try {
-      const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+        const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', {
         messages: [{ role: 'user', content: prompt }]
       });
       return Response.json({ feedback: (result.response || '').trim() });
