@@ -319,9 +319,13 @@ async function getFeedback() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: state.question.prompt, transcript: state.transcript })
     });
-    const data = await res.json();
+    const rawText = await res.text();
+    let data = {};
+    try { data = JSON.parse(rawText); } catch (e) { /* response wasn't JSON */ }
+    state.debugInfo = 'HTTP ' + res.status + ' — ' + rawText.slice(0, 600);
     state.aiFeedbackRaw = res.ok ? (data.feedback || '') : '';
   } catch (err) {
+    state.debugInfo = 'fetch threw: ' + (err && err.message ? err.message : String(err));
     state.aiFeedbackRaw = '';
   }
   await saveSubmission();
@@ -421,8 +425,7 @@ function render() {
       <button class="inline-flex items-center gap-3 bg-gold text-ink rounded-full px-7 py-4 font-semibold hover:scale-[1.02] active:scale-[0.98] transition" onclick="startRecording()">
         <span class="w-2.5 h-2.5 rounded-full bg-current"></span>Start recording
       </button>
-      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.
-        <br>"녹화" 버튼 클릭 > 질문 대답 > 버튼 다시 클릭 > 1차 피드백 확인</p>` +
+      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.</p>` +
       limitLine;
   } else if (state.phase === 'recording') {
     html = questionBlock(true) +
@@ -454,6 +457,9 @@ function render() {
       <p class="text-muted text-sm mt-2">Saved. Your teacher may add a note here too — check back later.</p>`;
     } else {
       html += `<div class="mt-6 text-record text-sm">Feedback couldn't be generated right now, but your answer was saved. Your teacher can still review it.</div>`;
+      if (state.debugInfo) {
+        html += `<div class="mt-3 text-xs text-muted font-mono bg-surface rounded-lg px-3 py-2 whitespace-pre-wrap break-all">[temp debug] ${escapeHtml(state.debugInfo)}</div>`;
+      }
     }
     html += `<button class="mt-7 border border-white/15 hover:border-gold rounded-full px-6 py-3 text-sm font-medium" onclick="practiceAnother()">Practice another question</button>` +
       limitLine;
