@@ -1,25 +1,29 @@
 import { isTeacherAuthed, unauthorized } from './_auth.js';
 
 // GET /api/questions            -> full list, for the teacher page to manage
-// GET /api/questions?next=1     -> one question from the active category,
-//                                   preferring whichever have been served
-//                                   least (so nothing repeats until the
-//                                   whole category has come up at least once).
+// GET /api/questions?next=1     -> one question for the student page. Picks a
+//                                   random category (equal chance each, so a
+//                                   category with lots of questions doesn't
+//                                   dominate), then the least-served question
+//                                   within it — so she gets a mix of category
+//                                   types across her daily questions, and
+//                                   nothing repeats until its category cycles.
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const db = env.DB;
 
   if (url.searchParams.get('next') === '1') {
-    const activeCategoryRow = await db
-      .prepare("SELECT value FROM settings WHERE key = 'active_category'")
-      .first();
     const lastIdRow = await db
       .prepare("SELECT value FROM settings WHERE key = 'last_question_id'")
       .first();
-
-    const category = activeCategoryRow ? activeCategoryRow.value : 'General';
     const lastId = lastIdRow ? Number(lastIdRow.value) : 0;
+
+    const categoryRows = await db.prepare('SELECT DISTINCT category FROM questions').all();
+    if (!categoryRows.results.length) {
+      return Response.json({ error: 'No questions yet — add some from the teacher page.' }, { status: 404 });
+    }
+    const category = categoryRows.results[Math.floor(Math.random() * categoryRows.results.length)].category;
 
     let question = await db
       .prepare('SELECT * FROM questions WHERE category = ? AND id != ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
@@ -32,13 +36,6 @@ export async function onRequestGet(context) {
         .prepare('SELECT * FROM questions WHERE category = ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
         .bind(category)
         .first();
-    }
-
-    if (!question) {
-      return Response.json(
-        { error: `No questions yet in the "${category}" category.` },
-        { status: 404 }
-      );
     }
 
     await db

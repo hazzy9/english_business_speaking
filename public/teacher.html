@@ -41,7 +41,6 @@ const state = {
   password: '',
   questions: [],
   categories: [],
-  activeCategory: 'General',
   dailyLimit: 3,
   submissions: [],
   vocabulary: [],
@@ -174,7 +173,6 @@ async function loadAll() {
 
   state.questions = qData.questions || [];
   state.categories = sData.categories || [];
-  state.activeCategory = sData.activeCategory || 'General';
   state.dailyLimit = sData.dailyLimit || 3;
   state.submissions = subData.submissions || [];
   state.vocabulary = vocabData.vocabulary || [];
@@ -225,14 +223,12 @@ async function deleteVocabulary(id) {
 }
 
 async function saveSettings() {
-  const categorySelect = document.getElementById('active-category-select');
   const limitInput = document.getElementById('daily-limit-input');
 
   const res = await fetch('/api/settings', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({
-      activeCategory: categorySelect.value,
       dailyLimit: Number(limitInput.value)
     })
   });
@@ -350,7 +346,7 @@ function render() {
     html += `<p class="text-muted text-sm">No questions yet — add one above.</p>`;
   } else {
     Object.keys(grouped).sort().forEach((cat) => {
-      html += `<div class="text-muted text-xs mt-4 mb-1">${escapeHtml(cat)}${cat === state.activeCategory ? ' <span class="text-gold">· active</span>' : ''}</div>`;
+      html += `<div class="text-muted text-xs mt-4 mb-1">${escapeHtml(cat)}</div>`;
       grouped[cat].forEach((q) => {
         html += `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-white/5">
           <span class="text-sm">${escapeHtml(q.prompt)}</span>
@@ -364,13 +360,8 @@ function render() {
 
     <div class="border-t border-white/10 pt-8 mb-10">
       <div class="font-serif text-xl mb-4">Settings</div>
+      <p class="text-muted text-sm mb-4">Each question is drawn from a random category, so her daily questions naturally mix Daily, Business, Scenario, and whatever else you've added.</p>
       <div class="flex flex-wrap gap-4 items-end">
-        <div>
-          <label class="text-muted text-xs block mb-2">Active category</label>
-          <select id="active-category-select" class="bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm">
-            ${state.categories.map((c) => `<option value="${escapeHtml(c)}" ${c === state.activeCategory ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
-          </select>
-        </div>
         <div>
           <label class="text-muted text-xs block mb-2">Daily question limit</label>
           <input id="daily-limit-input" type="number" min="1" value="${state.dailyLimit}"
