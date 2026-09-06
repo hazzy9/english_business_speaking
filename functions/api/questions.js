@@ -1,9 +1,10 @@
 import { isTeacherAuthed, unauthorized } from './_auth.js';
 
 // GET /api/questions            -> full list, for the teacher page to manage
-// GET /api/questions?next=1     -> one random question from the active category,
-//                                   for the student page. Avoids repeating the
-//                                   immediately previous question.
+// GET /api/questions?next=1     -> one question from the active category,
+//                                   preferring whichever have been served
+//                                   least (so nothing repeats until the
+//                                   whole category has come up at least once).
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -21,14 +22,14 @@ export async function onRequestGet(context) {
     const lastId = lastIdRow ? Number(lastIdRow.value) : 0;
 
     let question = await db
-      .prepare('SELECT * FROM questions WHERE category = ? AND id != ? ORDER BY RANDOM() LIMIT 1')
+      .prepare('SELECT * FROM questions WHERE category = ? AND id != ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
       .bind(category, lastId)
       .first();
 
     // Falls back to any question in the category (handles a category with only one question)
     if (!question) {
       question = await db
-        .prepare('SELECT * FROM questions WHERE category = ? ORDER BY RANDOM() LIMIT 1')
+        .prepare('SELECT * FROM questions WHERE category = ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
         .bind(category)
         .first();
     }
@@ -46,6 +47,13 @@ export async function onRequestGet(context) {
           'ON CONFLICT(key) DO UPDATE SET value = excluded.value'
       )
       .bind(String(question.id))
+      .run();
+
+    // Bumping this here (not on submit) means "asked" counts as served the
+    // moment she sees it, so the rotation stays fair even if she skips one.
+    await db
+      .prepare('UPDATE questions SET times_served = times_served + 1, last_served_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .bind(question.id)
       .run();
 
     return Response.json({ question });

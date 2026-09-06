@@ -284,6 +284,18 @@ async function generateSummary() {
   render();
 }
 
+async function clearToday() {
+  if (!confirm("This deletes today's practice sessions and resets today's count back to 0. Continue?")) return;
+
+  const res = await fetch('/api/submissions', {
+    method: 'DELETE',
+    headers: { 'X-Teacher-Password': state.password }
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  await loadAll();
+}
+
 function render() {
   const app = document.getElementById('app');
 
@@ -366,6 +378,12 @@ function render() {
         </div>
         <button onclick="saveSettings()" class="bg-gold text-ink rounded-lg px-5 py-2.5 text-sm font-semibold">Save settings</button>
       </div>
+    </div>
+
+    <div class="border-t border-white/10 pt-8 mb-10">
+      <div class="font-serif text-xl mb-4">Reset today</div>
+      <p class="text-muted text-sm mb-4">Deletes today's practice sessions and resets today's count back to 0 — handy after testing, so she opens to a clean page. Nothing before today is touched.</p>
+      <button onclick="clearToday()" class="border border-record text-record hover:bg-record hover:text-paper rounded-lg px-5 py-2.5 text-sm font-semibold transition">Clear today's sessions</button>
     </div>
 
     <div class="border-t border-white/10 pt-8 mb-10">

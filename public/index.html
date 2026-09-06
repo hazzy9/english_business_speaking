@@ -47,6 +47,7 @@ const state = {
   transcript: '',
   aiFeedbackRaw: '',
   submissions: [],
+  historyScope: 'today', // 'today' | 'week'
   todayCount: 0,
   dailyLimit: 3,
   recordingSeconds: 0,
@@ -182,7 +183,7 @@ function renderFeedbackExtras(fb, transcript) {
 async function loadInitial() {
   try {
     const [subsRes, qRes] = await Promise.all([
-      fetch('/api/submissions'),
+      fetch('/api/submissions?scope=today'),
       fetch('/api/questions?next=1')
     ]);
     const subsData = await subsRes.json();
@@ -367,10 +368,20 @@ async function saveSubmission() {
 
 async function refreshHistory() {
   try {
-    const res = await fetch('/api/submissions');
+    const res = await fetch('/api/submissions?scope=' + state.historyScope);
     const data = await res.json();
     state.submissions = data.submissions || [];
   } catch (err) { /* keep showing whatever we already had */ }
+}
+
+async function loadHistory(scope) {
+  state.historyScope = scope;
+  try {
+    const res = await fetch('/api/submissions?scope=' + scope);
+    const data = await res.json();
+    state.submissions = data.submissions || [];
+  } catch (err) { /* keep showing whatever we already had */ }
+  render();
 }
 
 function practiceAnother() {
@@ -410,7 +421,7 @@ function render() {
       <button class="inline-flex items-center gap-3 bg-gold text-ink rounded-full px-7 py-4 font-semibold hover:scale-[1.02] active:scale-[0.98] transition" onclick="startRecording()">
         <span class="w-2.5 h-2.5 rounded-full bg-current"></span>Start recording
       </button>
-      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.<br>"녹음하기" 버튼 클릭 > 질문에 대답 > 버튼 다시 클릭 > 1차 피드백 확인.</p>` +
+      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.</p>` +
       limitLine;
   } else if (state.phase === 'recording') {
     html = questionBlock(true) +
@@ -452,9 +463,22 @@ function render() {
 }
 
 function historyBlock() {
-  if (!state.submissions || state.submissions.length === 0) return '';
+  const scope = state.historyScope;
+  const title = scope === 'week' ? "Your practice — last 7 days" : 'Your past practice';
+  const toggleLabel = scope === 'week' ? 'Back to today' : 'See the past 7 days';
+  const toggleAction = scope === 'week' ? "loadHistory('today')" : "loadHistory('week')";
+
   let html = `<div class="mt-16 pt-8 border-t border-white/10">
-    <div class="font-serif text-xl mb-6">Your past practice</div>`;
+    <div class="flex items-center justify-between mb-6 gap-4">
+      <div class="font-serif text-xl">${title}</div>
+      <button class="text-muted text-xs underline underline-offset-2 hover:text-paper shrink-0" onclick="${toggleAction}">${toggleLabel}</button>
+    </div>`;
+
+  if (!state.submissions || state.submissions.length === 0) {
+    html += `<p class="text-muted text-sm">${scope === 'week' ? 'Nothing in the past 7 days yet.' : "Nothing yet today — it'll show up here once you practice."}</p>`;
+    html += `</div>`;
+    return html;
+  }
 
   state.submissions.forEach((s) => {
     const fb = parseFeedback(s.ai_feedback);
