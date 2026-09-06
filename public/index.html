@@ -45,7 +45,7 @@ const state = {
   phase: 'loading', // loading | idle | recording | transcribing | feedbacking | done | feedback-error | no-speech | limit-reached | mic-denied | error | unsupported
   question: null,
   transcript: '',
-  aiFeedback: '',
+  aiFeedbackRaw: '',
   submissions: [],
   todayCount: 0,
   dailyLimit: 3,
@@ -74,6 +74,109 @@ function formatDate(iso) {
   const d = new Date(iso + 'Z'); // created_at is stored as UTC by SQLite
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' · ' +
          d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+function wordCount(text) {
+  if (!text) return 0;
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+// Parses the structured feedback JSON saved by /api/feedback. Falls back
+// to a safe empty shape (with the raw text preserved) for legacy plain-text
+// entries saved before this format existed, or anything malformed —
+// old sessions should never crash the page.
+function parseFeedback(raw) {
+  if (!raw) return { corrections: [], wordChoices: [], fillerWords: [], fluencyScore: null, raw: '' };
+  try {
+    const obj = JSON.parse(raw);
+    if (obj && (Array.isArray(obj.corrections) || Array.isArray(obj.wordChoices))) {
+      return {
+        corrections: obj.corrections || [],
+        wordChoices: obj.wordChoices || [],
+        fillerWords: obj.fillerWords || [],
+        fluencyScore: Number.isInteger(obj.fluencyScore) ? obj.fluencyScore : null,
+        raw: obj.raw || ''
+      };
+    }
+  } catch (err) { /* not JSON — legacy plain-text feedback */ }
+  return { corrections: [], wordChoices: [], fillerWords: [], fluencyScore: null, raw };
+}
+
+// Builds the transcript HTML with corrections shown inline: the wrong
+// phrase struck through, the fix right after it. Any correction whose
+// "original" text can't be found verbatim in the transcript is skipped
+// here (and surfaced separately) rather than breaking the render.
+function renderInlineTranscript(transcript, corrections) {
+  if (!corrections || corrections.length === 0) return escapeHtml(transcript);
+
+  const matches = [];
+  const unmatched = [];
+  corrections.forEach((c) => {
+    if (!c.original) return;
+    const idx = transcript.indexOf(c.original);
+    if (idx !== -1) {
+      matches.push({ start: idx, end: idx + c.original.length, corrected: c.corrected });
+    } else {
+      unmatched.push(c);
+    }
+  });
+
+  matches.sort((a, b) => a.start - b.start);
+  const filtered = [];
+  let lastEnd = -1;
+  matches.forEach((m) => {
+    if (m.start >= lastEnd) { filtered.push(m); lastEnd = m.end; }
+  });
+
+  let html = '';
+  let cursor = 0;
+  filtered.forEach((m) => {
+    html += escapeHtml(transcript.slice(cursor, m.start));
+    html += '<span class="line-through text-muted">' + escapeHtml(transcript.slice(m.start, m.end)) + '</span> ';
+    html += '<span class="text-gold">' + escapeHtml(m.corrected) + '</span>';
+    cursor = m.end;
+  });
+  html += escapeHtml(transcript.slice(cursor));
+
+  html_unmatched_cache = unmatched; // stashed for the caller
+  return html;
+}
+let html_unmatched_cache = [];
+
+// Renders the compact stats line + word choices + any unmatched corrections
+// that belong under a transcript. Shared between the "done" state and history entries.
+function renderFeedbackExtras(fb, transcript) {
+  let html = '';
+  const statParts = [];
+  if (fb.fluencyScore) statParts.push('Fluency ' + fb.fluencyScore + '/5');
+  if (fb.fillerWords && fb.fillerWords.length) {
+    statParts.push(fb.fillerWords.length + ' filler word' + (fb.fillerWords.length > 1 ? 's' : '') + ' (' + fb.fillerWords.join(', ') + ')');
+  }
+  statParts.push(wordCount(transcript) + ' words');
+  html += '<div class="text-muted text-xs mt-2 mb-3">' + statParts.join(' · ') + '</div>';
+
+  if (fb.wordChoices && fb.wordChoices.length) {
+    html += '<div class="text-xs text-muted mb-1">Better word choices</div>';
+    html += '<div class="bg-surface rounded-lg px-4 py-3 text-sm leading-relaxed mb-3">';
+    html += fb.wordChoices.map((wc) =>
+      '<div>' + escapeHtml(wc.better) + (wc.korean ? ' <span class="text-muted">(' + escapeHtml(wc.korean) + ')</span>' : '') +
+      (wc.original ? ' <span class="text-muted">instead of "' + escapeHtml(wc.original) + '"</span>' : '') + '</div>'
+    ).join('');
+    html += '</div>';
+  }
+
+  if (html_unmatched_cache.length) {
+    html += '<div class="text-xs text-muted mb-1">Also noted</div>';
+    html += '<div class="text-sm text-muted mb-3">' + html_unmatched_cache.map((c) =>
+      escapeHtml(c.original) + ' → ' + escapeHtml(c.corrected)
+    ).join('<br>') + '</div>';
+  }
+
+  if (fb.raw) {
+    html += '<div class="text-sm leading-relaxed text-muted italic mb-3">' + escapeHtml(fb.raw) + '</div>';
+  }
+
+  return html;
 }
 
 async function loadInitial() {
@@ -110,7 +213,7 @@ async function pickNewQuestion() {
   } catch (err) { /* keep the current question if this fails */ }
   state.phase = state.todayCount >= state.dailyLimit ? 'limit-reached' : 'idle';
   state.transcript = '';
-  state.aiFeedback = '';
+  state.aiFeedbackRaw = '';
   render();
 }
 
@@ -216,9 +319,9 @@ async function getFeedback() {
       body: JSON.stringify({ question: state.question.prompt, transcript: state.transcript })
     });
     const data = await res.json();
-    state.aiFeedback = res.ok ? (data.feedback || '') : '';
+    state.aiFeedbackRaw = res.ok ? (data.feedback || '') : '';
   } catch (err) {
-    state.aiFeedback = '';
+    state.aiFeedbackRaw = '';
   }
   await saveSubmission();
 }
@@ -231,7 +334,7 @@ async function saveSubmission() {
       body: JSON.stringify({
         questionId: state.question.id,
         transcript: state.transcript,
-        aiFeedback: state.aiFeedback
+        aiFeedback: state.aiFeedbackRaw
       })
     });
     const data = await res.json();
@@ -252,7 +355,7 @@ async function saveSubmission() {
 
     state.todayCount = data.todayCount;
     state.dailyLimit = data.dailyLimit;
-    state.phase = state.aiFeedback ? 'done' : 'feedback-error';
+    state.phase = state.aiFeedbackRaw ? 'done' : 'feedback-error';
     await refreshHistory();
     render();
   } catch (err) {
@@ -272,7 +375,7 @@ async function refreshHistory() {
 
 function practiceAnother() {
   state.transcript = '';
-  state.aiFeedback = '';
+  state.aiFeedbackRaw = '';
   pickNewQuestion();
 }
 
@@ -307,7 +410,7 @@ function render() {
       <button class="inline-flex items-center gap-3 bg-gold text-ink rounded-full px-7 py-4 font-semibold hover:scale-[1.02] active:scale-[0.98] transition" onclick="startRecording()">
         <span class="w-2.5 h-2.5 rounded-full bg-current"></span>Start recording
       </button>
-      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.</p>` +
+      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.<br>버튼을 클릭하시구 답을 말해주세요. 그 이후 피드백이 바로 뜹니다.></p>` +
       limitLine;
   } else if (state.phase === 'recording') {
     html = questionBlock(true) +
@@ -328,17 +431,15 @@ function render() {
       `<div class="text-base text-record">No speech was picked up. Try again, a little closer to the microphone.</div>
       <button class="mt-6 border border-white/15 hover:border-gold rounded-full px-6 py-3 text-sm font-medium" onclick="state.phase='idle'; render();">Try again</button>`;
   } else if (state.phase === 'done' || state.phase === 'feedback-error') {
+    const fb = parseFeedback(state.aiFeedbackRaw);
     html = questionBlock(true) +
       `<div class="border-t border-white/10 pt-5">
         <div class="text-muted text-xs mb-2">Your answer</div>
-        <div class="text-base leading-relaxed whitespace-pre-wrap">${escapeHtml(state.transcript)}</div>
+        <div class="text-base leading-relaxed whitespace-pre-wrap">${renderInlineTranscript(state.transcript, fb.corrections)}</div>
       </div>`;
     if (state.phase === 'done') {
-      html += `<div class="border-t border-white/10 pt-5 mt-8">
-        <div class="text-muted text-xs mb-2">Feedback</div>
-        <div class="bg-surface rounded-xl px-5 py-4 text-base leading-relaxed whitespace-pre-wrap">${escapeHtml(state.aiFeedback)}</div>
-      </div>
-      <p class="text-muted text-sm mt-5">Saved. Your teacher may add a note here too — check back later.</p>`;
+      html += `<div class="mt-2">` + renderFeedbackExtras(fb, state.transcript) + `</div>
+      <p class="text-muted text-sm mt-2">Saved. Your teacher may add a note here too — check back later.</p>`;
     } else {
       html += `<div class="mt-6 text-record text-sm">Feedback couldn't be generated right now, but your answer was saved. Your teacher can still review it.</div>`;
     }
@@ -356,19 +457,26 @@ function historyBlock() {
     <div class="font-serif text-xl mb-6">Your past practice</div>`;
 
   state.submissions.forEach((s) => {
-    const finalFeedback = s.teacher_feedback && s.teacher_feedback.trim() ? s.teacher_feedback : s.ai_feedback;
+    const fb = parseFeedback(s.ai_feedback);
+    const hasStructured = fb.corrections.length || fb.wordChoices.length || fb.fillerWords.length || fb.fluencyScore;
     const isTeacherReviewed = !!(s.teacher_feedback && s.teacher_feedback.trim());
 
     html += `<div class="py-5 border-t border-white/10 first:border-t-0 first:pt-0">
       <div class="text-muted text-xs mb-1">${formatDate(s.created_at)}</div>
       <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
-      <div class="text-sm leading-relaxed mb-3">${escapeHtml(s.transcript)}</div>`;
+      <div class="text-sm leading-relaxed mb-1">${renderInlineTranscript(s.transcript, fb.corrections)}</div>`;
 
-    if (finalFeedback) {
-      html += `<div class="text-xs ${isTeacherReviewed ? 'text-gold' : 'text-muted'} mb-1">${isTeacherReviewed ? "Teacher's note" : 'AI feedback'}</div>
-        <div class="text-sm leading-relaxed ${isTeacherReviewed ? 'bg-surfaceRaised border-l-2 border-gold pl-4 py-2 rounded-r-lg' : 'bg-surface rounded-lg px-4 py-3'} whitespace-pre-wrap">${escapeHtml(finalFeedback)}</div>`;
+    if (hasStructured) {
+      html += renderFeedbackExtras(fb, s.transcript);
+    } else if (fb.raw) {
+      html += `<div class="text-sm leading-relaxed text-muted italic mb-3">${escapeHtml(fb.raw)}</div>`;
+    }
+
+    if (isTeacherReviewed) {
+      html += `<div class="text-xs text-gold mb-1">Teacher's note</div>
+        <div class="text-sm leading-relaxed bg-surfaceRaised border-l-2 border-gold pl-4 py-2 rounded-r-lg whitespace-pre-wrap">${escapeHtml(s.teacher_feedback)}</div>`;
     } else {
-      html += `<div class="text-xs text-muted italic">Waiting for feedback</div>`;
+      html += `<div class="text-xs text-muted italic">Waiting for your teacher's feedback</div>`;
     }
     html += `</div>`;
   });

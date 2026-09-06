@@ -18,6 +18,20 @@ CREATE TABLE IF NOT EXISTS submissions (
     FOREIGN KEY(question_id) REFERENCES questions(id)
 );
 
+-- Words she's been corrected on. Each one is also auto-added as a real
+-- question in the "Vocabulary" category, so it comes back around as
+-- practice later — this table just tracks what's already been saved
+-- (and de-dupes) and links back to that question.
+CREATE TABLE IF NOT EXISTS vocabulary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    word TEXT NOT NULL,
+    korean TEXT,
+    question_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(question_id) REFERENCES questions(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vocabulary_word ON vocabulary (word COLLATE NOCASE);
+
 -- Simple key/value store for app-wide settings
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,

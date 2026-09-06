@@ -28,6 +28,10 @@
     }
   };
 </script>
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { animation: spin 0.8s linear infinite; }
+</style>
 </head>
 <body class="bg-ink text-paper font-sans min-h-screen">
 <div class="max-w-3xl mx-auto px-6 py-14" id="app"></div>
@@ -40,8 +44,11 @@ const state = {
   activeCategory: 'General',
   dailyLimit: 3,
   submissions: [],
+  vocabulary: [],
   loaded: false,
-  authError: ''
+  authError: '',
+  summary: null,
+  summaryLoading: false
 };
 
 function escapeHtml(str) {
@@ -56,25 +63,121 @@ function formatDate(iso) {
          d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
+function wordCount(text) {
+  if (!text) return 0;
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function parseFeedback(raw) {
+  if (!raw) return { corrections: [], wordChoices: [], fillerWords: [], fluencyScore: null, raw: '' };
+  try {
+    const obj = JSON.parse(raw);
+    if (obj && (Array.isArray(obj.corrections) || Array.isArray(obj.wordChoices))) {
+      return {
+        corrections: obj.corrections || [],
+        wordChoices: obj.wordChoices || [],
+        fillerWords: obj.fillerWords || [],
+        fluencyScore: Number.isInteger(obj.fluencyScore) ? obj.fluencyScore : null,
+        raw: obj.raw || ''
+      };
+    }
+  } catch (err) { /* legacy plain-text feedback */ }
+  return { corrections: [], wordChoices: [], fillerWords: [], fluencyScore: null, raw };
+}
+
+let html_unmatched_cache = [];
+function renderInlineTranscript(transcript, corrections) {
+  if (!corrections || corrections.length === 0) { html_unmatched_cache = []; return escapeHtml(transcript); }
+
+  const matches = [];
+  const unmatched = [];
+  corrections.forEach((c) => {
+    if (!c.original) return;
+    const idx = transcript.indexOf(c.original);
+    if (idx !== -1) {
+      matches.push({ start: idx, end: idx + c.original.length, corrected: c.corrected });
+    } else {
+      unmatched.push(c);
+    }
+  });
+
+  matches.sort((a, b) => a.start - b.start);
+  const filtered = [];
+  let lastEnd = -1;
+  matches.forEach((m) => {
+    if (m.start >= lastEnd) { filtered.push(m); lastEnd = m.end; }
+  });
+
+  let html = '';
+  let cursor = 0;
+  filtered.forEach((m) => {
+    html += escapeHtml(transcript.slice(cursor, m.start));
+    html += '<span class="line-through text-muted">' + escapeHtml(transcript.slice(m.start, m.end)) + '</span> ';
+    html += '<span class="text-gold">' + escapeHtml(m.corrected) + '</span>';
+    cursor = m.end;
+  });
+  html += escapeHtml(transcript.slice(cursor));
+
+  html_unmatched_cache = unmatched;
+  return html;
+}
+
+function renderFeedbackExtras(fb, transcript) {
+  let html = '';
+  const statParts = [];
+  if (fb.fluencyScore) statParts.push('Fluency ' + fb.fluencyScore + '/5');
+  if (fb.fillerWords && fb.fillerWords.length) {
+    statParts.push(fb.fillerWords.length + ' filler word' + (fb.fillerWords.length > 1 ? 's' : '') + ' (' + fb.fillerWords.join(', ') + ')');
+  }
+  statParts.push(wordCount(transcript) + ' words');
+  html += '<div class="text-muted text-xs mt-2 mb-3">' + statParts.join(' · ') + '</div>';
+
+  if (fb.wordChoices && fb.wordChoices.length) {
+    html += '<div class="text-xs text-muted mb-1">Better word choices</div>';
+    html += '<div class="bg-surface rounded-lg px-4 py-3 text-sm leading-relaxed mb-3">';
+    html += fb.wordChoices.map((wc) =>
+      '<div>' + escapeHtml(wc.better) + (wc.korean ? ' <span class="text-muted">(' + escapeHtml(wc.korean) + ')</span>' : '') +
+      (wc.original ? ' <span class="text-muted">instead of "' + escapeHtml(wc.original) + '"</span>' : '') + '</div>'
+    ).join('');
+    html += '</div>';
+  }
+
+  if (html_unmatched_cache.length) {
+    html += '<div class="text-xs text-muted mb-1">Also noted</div>';
+    html += '<div class="text-sm text-muted mb-3">' + html_unmatched_cache.map((c) =>
+      escapeHtml(c.original) + ' → ' + escapeHtml(c.corrected)
+    ).join('<br>') + '</div>';
+  }
+
+  if (fb.raw) {
+    html += '<div class="text-sm leading-relaxed text-muted italic mb-3">' + escapeHtml(fb.raw) + '</div>';
+  }
+
+  return html;
+}
+
 function authHeaders() {
   return { 'Content-Type': 'application/json', 'X-Teacher-Password': state.password };
 }
 
 async function loadAll() {
-  const [qRes, sRes, subRes] = await Promise.all([
+  const [qRes, sRes, subRes, vocabRes] = await Promise.all([
     fetch('/api/questions'),
     fetch('/api/settings'),
-    fetch('/api/submissions')
+    fetch('/api/submissions'),
+    fetch('/api/vocabulary')
   ]);
   const qData = await qRes.json();
   const sData = await sRes.json();
   const subData = await subRes.json();
+  const vocabData = await vocabRes.json();
 
   state.questions = qData.questions || [];
   state.categories = sData.categories || [];
   state.activeCategory = sData.activeCategory || 'General';
   state.dailyLimit = sData.dailyLimit || 3;
   state.submissions = subData.submissions || [];
+  state.vocabulary = vocabData.vocabulary || [];
   state.loaded = true;
   render();
 }
@@ -103,6 +206,16 @@ async function addQuestion() {
 
 async function deleteQuestion(id) {
   const res = await fetch('/api/questions?id=' + id, {
+    method: 'DELETE',
+    headers: { 'X-Teacher-Password': state.password }
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  await loadAll();
+}
+
+async function deleteVocabulary(id) {
+  const res = await fetch('/api/vocabulary?id=' + id, {
     method: 'DELETE',
     headers: { 'X-Teacher-Password': state.password }
   });
@@ -152,6 +265,25 @@ async function saveFeedback(id) {
   await loadAll();
 }
 
+async function generateSummary() {
+  state.summaryLoading = true;
+  state.summary = null;
+  render();
+
+  const res = await fetch('/api/summary', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ days: 7 })
+  });
+
+  state.summaryLoading = false;
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  const data = await res.json();
+  state.summary = res.ok ? data : { summary: 'Could not generate a summary right now.', sessionCount: 0, avgFluency: null };
+  render();
+}
+
 function render() {
   const app = document.getElementById('app');
 
@@ -171,6 +303,19 @@ function render() {
         class="w-full bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm" />
       ${state.authError ? `<p class="text-record text-sm mt-2">${escapeHtml(state.authError)}</p>` : ''}
     </div>
+
+    <div class="border-t border-white/10 pt-8 mb-10">
+      <div class="font-serif text-xl mb-4">Weekly pattern summary</div>
+      <button onclick="generateSummary()" class="bg-gold text-ink rounded-lg px-5 py-2.5 text-sm font-semibold mb-4" ${state.summaryLoading ? 'disabled' : ''}>
+        ${state.summaryLoading ? 'Generating…' : 'Generate summary (last 7 days)'}
+      </button>`;
+
+  if (state.summary) {
+    html += `<div class="bg-surface rounded-lg px-5 py-4 text-sm leading-relaxed mb-2">${escapeHtml(state.summary.summary)}</div>
+      <div class="text-muted text-xs">${state.summary.sessionCount} session${state.summary.sessionCount === 1 ? '' : 's'}${state.summary.avgFluency ? ' · avg fluency ' + state.summary.avgFluency + '/5' : ''}</div>`;
+  }
+
+  html += `</div>
 
     <div class="border-t border-white/10 pt-8 mb-10">
       <div class="font-serif text-xl mb-4">Question sets</div>
@@ -223,6 +368,24 @@ function render() {
       </div>
     </div>
 
+    <div class="border-t border-white/10 pt-8 mb-10">
+      <div class="font-serif text-xl mb-4">Words she's learned</div>`;
+
+  if (state.vocabulary.length === 0) {
+    html += `<p class="text-muted text-sm">No word corrections saved yet — they'll show up here as she practices.</p>`;
+  } else {
+    html += `<div class="space-y-1">`;
+    state.vocabulary.forEach((v) => {
+      html += `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-white/5">
+        <span class="text-sm">${escapeHtml(v.word)}${v.korean ? ' <span class="text-muted">(' + escapeHtml(v.korean) + ')</span>' : ''}</span>
+        <button onclick="deleteVocabulary(${v.id})" class="text-muted hover:text-record text-xs shrink-0">Remove</button>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `</div>
+
     <div class="border-t border-white/10 pt-8">
       <div class="font-serif text-xl mb-4">Submissions</div>`;
 
@@ -230,13 +393,21 @@ function render() {
     html += `<p class="text-muted text-sm">No practice sessions yet. Once she records an answer, it'll show up here.</p>`;
   } else {
     state.submissions.forEach((s) => {
+      const fb = parseFeedback(s.ai_feedback);
+      const hasStructured = fb.corrections.length || fb.wordChoices.length || fb.fillerWords.length || fb.fluencyScore;
+
       html += `<div class="py-5 border-t border-white/10 first:border-t-0 first:pt-0">
         <div class="text-muted text-xs mb-1">${formatDate(s.created_at)} · ${escapeHtml(s.question_category)}</div>
         <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
-        <div class="text-sm leading-relaxed mb-3">${escapeHtml(s.transcript)}</div>
-        ${s.ai_feedback ? `<div class="text-muted text-xs mb-1">AI feedback</div>
-        <div class="bg-surface rounded-lg px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap mb-3">${escapeHtml(s.ai_feedback)}</div>` : ''}
-        <label class="text-muted text-xs block mb-1">Your feedback ${s.teacher_feedback ? '<span class="text-gold">· saved</span>' : ''}</label>
+        <div class="text-sm leading-relaxed mb-1">${renderInlineTranscript(s.transcript, fb.corrections)}</div>`;
+
+      if (hasStructured) {
+        html += renderFeedbackExtras(fb, s.transcript);
+      } else if (fb.raw) {
+        html += `<div class="text-sm leading-relaxed text-muted italic mb-3">${escapeHtml(fb.raw)}</div>`;
+      }
+
+      html += `<label class="text-muted text-xs block mb-1">Your feedback ${s.teacher_feedback ? '<span class="text-gold">· saved</span>' : ''}</label>
         <textarea id="fb-${s.id}" placeholder="Write your feedback for her here…"
           class="w-full bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm min-h-[80px] mb-2">${escapeHtml(s.teacher_feedback || '')}</textarea>
         <button id="btn-${s.id}" onclick="saveFeedback(${s.id})" class="bg-gold text-ink rounded-lg px-5 py-2 text-sm font-semibold">${s.teacher_feedback ? 'Update feedback' : 'Save feedback'}</button>
