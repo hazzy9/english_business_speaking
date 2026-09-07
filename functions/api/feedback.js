@@ -36,14 +36,25 @@ export async function onRequestPost(context) {
         max_tokens: 400
       });
   
-      const raw = (result.response || '').trim();
-      const parsed = parseFeedbackJson(raw);
+      // Defensive: don't assume the result shape. Different Workers AI model
+      // variants have returned result.response as something other than a
+      // plain string in testing, which crashed .trim(). Handle every case
+      // without throwing, and log the unexpected shape so it can be fixed
+      // properly rather than guessed at again.
+      let raw;
+      if (typeof result === 'string') {
+        raw = result;
+      } else if (result && typeof result.response === 'string') {
+        raw = result.response;
+      } else {
+        console.error('feedback.js unexpected AI.run result shape:', JSON.stringify(result));
+        raw = result && result.response != null ? JSON.stringify(result.response) : JSON.stringify(result || {});
+      }
+      raw = raw.trim();
   
+      const parsed = parseFeedbackJson(raw);
       return Response.json({ feedback: JSON.stringify(parsed) });
     } catch (err) {
-      // Logged so it shows up in `wrangler pages deployment tail` or the
-      // dashboard's real-time logs — the frontend only ever sees the generic
-      // message below, but this line is what actually tells us why it failed.
       console.error('feedback.js AI.run failed:', err && err.message ? err.message : err);
       return Response.json(
         { error: 'Feedback generation failed. Please try again.', detail: err && err.message ? err.message : String(err) },
