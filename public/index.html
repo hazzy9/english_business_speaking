@@ -425,7 +425,8 @@ function render() {
       <button class="inline-flex items-center gap-3 bg-gold text-ink rounded-full px-7 py-4 font-semibold hover:scale-[1.02] active:scale-[0.98] transition" onclick="startRecording()">
         <span class="w-2.5 h-2.5 rounded-full bg-current"></span>Start recording
       </button>
-      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.</p>` +
+      <p class="text-muted text-sm mt-4 leading-relaxed">Click the button, speak your answer, then click again to finish. You'll get feedback right away.
+        <br>"녹음하기" 버튼 클릭 > 질문 대답하기 > 버튼 다시 클릭 > 1차 피드백 확인</p>` +
       limitLine;
   } else if (state.phase === 'recording') {
     html = questionBlock(true) +
