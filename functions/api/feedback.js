@@ -41,7 +41,14 @@ export async function onRequestPost(context) {
   
       return Response.json({ feedback: JSON.stringify(parsed) });
     } catch (err) {
-      return Response.json({ error: 'Feedback generation failed. Please try again.' }, { status: 500 });
+      // Logged so it shows up in `wrangler pages deployment tail` or the
+      // dashboard's real-time logs — the frontend only ever sees the generic
+      // message below, but this line is what actually tells us why it failed.
+      console.error('feedback.js AI.run failed:', err && err.message ? err.message : err);
+      return Response.json(
+        { error: 'Feedback generation failed. Please try again.', detail: err && err.message ? err.message : String(err) },
+        { status: 500 }
+      );
     }
   }
   
