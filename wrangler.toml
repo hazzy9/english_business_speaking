@@ -6,6 +6,7 @@ pages_build_output_dir = "public"
 binding = "DB"
 database_name = "speaking_practice_db"
 database_id = "4d2177bf-8c1d-4365-8a83-d33beda31467"
+preview_database_id = "a3350880-e09f-4f97-b7f1-4dad1c019c50"
 
 [ai]
 binding = "AI"
