@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Speaking Practice</title>
+<title>Speaking Practice (TEST)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
@@ -103,56 +103,16 @@ function parseFeedback(raw) {
   return { corrections: [], wordChoices: [], fillerWords: [], fluencyScore: null, raw };
 }
 
-// Builds the transcript HTML with corrections shown inline: the wrong
-// phrase struck through, the fix right after it. Any correction whose
-// "original" text can't be found verbatim in the transcript is skipped
-// here (and surfaced separately) rather than breaking the render.
-function renderInlineTranscript(transcript, corrections) {
-  if (!corrections || corrections.length === 0) return escapeHtml(transcript);
-
-  const matches = [];
-  const unmatched = [];
-  corrections.forEach((c) => {
-    if (!c.original) return;
-    const idx = transcript.indexOf(c.original);
-    if (idx !== -1) {
-      matches.push({ start: idx, end: idx + c.original.length, corrected: c.corrected });
-    } else {
-      unmatched.push(c);
-    }
-  });
-
-  matches.sort((a, b) => a.start - b.start);
-  const filtered = [];
-  let lastEnd = -1;
-  matches.forEach((m) => {
-    if (m.start >= lastEnd) { filtered.push(m); lastEnd = m.end; }
-  });
-
-  let html = '';
-  let cursor = 0;
-  filtered.forEach((m) => {
-    html += escapeHtml(transcript.slice(cursor, m.start));
-    html += '<span class="line-through text-muted">' + escapeHtml(transcript.slice(m.start, m.end)) + '</span> ';
-    html += '<span class="text-gold">' + escapeHtml(m.corrected) + '</span>';
-    cursor = m.end;
-  });
-  html += escapeHtml(transcript.slice(cursor));
-
-  html_unmatched_cache = unmatched; // stashed for the caller
-  return html;
-}
-let html_unmatched_cache = [];
-
-// Renders the compact stats line + word choices + any unmatched corrections
-// that belong under a transcript. Shared between the "done" state and history entries.
+// Renders the compact stats line + word choices under a transcript.
+// Shared between the "done" state and history entries. Deliberately
+// keeps only fluency, word count, and word choices — no inline
+// correction markup and no filler-word callout, since those made the
+// original answer harder to read and word choices is where feedback
+// quality is consistently highest.
 function renderFeedbackExtras(fb, transcript) {
   let html = '';
   const statParts = [];
   if (fb.fluencyScore) statParts.push('Fluency ' + fb.fluencyScore + '/5');
-  if (fb.fillerWords && fb.fillerWords.length) {
-    statParts.push(fb.fillerWords.length + ' filler word' + (fb.fillerWords.length > 1 ? 's' : '') + ' (' + fb.fillerWords.join(', ') + ')');
-  }
   statParts.push(wordCount(transcript) + ' words');
   html += '<div class="text-muted text-xs mt-2 mb-3">' + statParts.join(' · ') + '</div>';
 
@@ -164,13 +124,6 @@ function renderFeedbackExtras(fb, transcript) {
       (wc.original ? ' <span class="text-muted">instead of "' + escapeHtml(wc.original) + '"</span>' : '') + '</div>'
     ).join('');
     html += '</div>';
-  }
-
-  if (html_unmatched_cache.length) {
-    html += '<div class="text-xs text-muted mb-1">Also noted</div>';
-    html += '<div class="text-sm text-muted mb-3">' + html_unmatched_cache.map((c) =>
-      escapeHtml(c.original) + ' → ' + escapeHtml(c.corrected)
-    ).join('<br>') + '</div>';
   }
 
   if (fb.raw) {
@@ -451,7 +404,7 @@ function render() {
     html = questionBlock(true) +
       `<div class="border-t border-white/10 pt-5">
         <div class="text-muted text-xs mb-2">Your answer</div>
-        <div class="text-base leading-relaxed whitespace-pre-wrap">${renderInlineTranscript(state.transcript, fb.corrections)}</div>
+        <div class="text-base leading-relaxed whitespace-pre-wrap">${escapeHtml(state.transcript)}</div>
       </div>`;
     if (state.phase === 'done') {
       html += `<div class="mt-2">` + renderFeedbackExtras(fb, state.transcript) + `</div>
@@ -496,7 +449,7 @@ function historyBlock() {
     html += `<div class="py-5 border-t border-white/10 first:border-t-0 first:pt-0">
       <div class="text-muted text-xs mb-1">${formatDate(s.created_at)}</div>
       <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
-      <div class="text-sm leading-relaxed mb-1">${renderInlineTranscript(s.transcript, fb.corrections)}</div>`;
+      <div class="text-sm leading-relaxed mb-1">${escapeHtml(s.transcript)}</div>`;
 
     if (hasStructured) {
       html += renderFeedbackExtras(fb, s.transcript);
