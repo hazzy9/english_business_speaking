@@ -250,6 +250,18 @@ async function clearToday() {
   await loadAll();
 }
 
+async function deleteSubmission(id) {
+  if (!confirm('Delete this recording and its feedback? This cannot be undone.')) return;
+
+  const res = await fetch('/api/submissions?id=' + id, {
+    method: 'DELETE',
+    headers: { 'X-Teacher-Password': state.password }
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  await loadAll();
+}
+
 function render() {
   const app = document.getElementById('app');
 
@@ -364,7 +376,11 @@ function render() {
       const hasStructured = fb.corrections.length || fb.wordChoices.length || fb.fillerWords.length || fb.fluencyScore;
 
       html += `<div class="py-5 border-t border-white/10 first:border-t-0 first:pt-0">
-        <div class="text-muted text-xs mb-1">${formatDate(s.created_at)} · ${escapeHtml(s.question_category)}</div>
+        <div class="flex items-center justify-between gap-3 mb-1">
+          <div class="text-muted text-xs">${formatDate(s.created_at)} · ${escapeHtml(s.question_category)}</div>
+          <button onclick="deleteSubmission(${s.id})" class="text-muted hover:text-record text-xs shrink-0">Delete</button>
+        </div>
+        
         <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
         <div class="text-sm leading-relaxed mb-1">${escapeHtml(s.transcript)}</div>`;
 
