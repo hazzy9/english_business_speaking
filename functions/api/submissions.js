@@ -103,16 +103,23 @@ export async function onRequestGet(context) {
 
   return Response.json({ submissions: results, todayCount, dailyLimit });
 }
-
-// DELETE /api/submissions  — teacher only. Clears today's answers and
-// resets today's count, freeing up the daily limit again. Yesterday's (and
-// earlier) submissions are untouched — this only ever affects "today" by
-// the same local-time definition used everywhere else in this file.
+// DELETE /api/submissions            — teacher only. Clears today's answers
+//                                       and resets today's count.
+// DELETE /api/submissions?id=123     — teacher only. Deletes one specific
+//                                       submission, regardless of its date.
 export async function onRequestDelete(context) {
   const { request, env } = context;
   if (!isTeacherAuthed(request, env)) return unauthorized();
 
   const db = env.DB;
+  const url = new URL(request.url);
+  const id = url.searchParams.get('id');
+
+  if (id) {
+    await db.prepare('DELETE FROM submissions WHERE id = ?').bind(id).run();
+    return Response.json({ ok: true });
+  }
+
   await db
     .prepare("DELETE FROM submissions WHERE date(created_at, ?) = date('now', ?)")
     .bind(TZ_OFFSET, TZ_OFFSET)
