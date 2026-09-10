@@ -84,14 +84,25 @@ export async function onRequestPost(context) {
 }
 
 // DELETE /api/questions?id=123  — teacher only
+// DELETE /api/questions?id=123  — teacher only
 export async function onRequestDelete(context) {
-  const { request, env } = context;
-  if (!isTeacherAuthed(request, env)) return unauthorized();
-
-  const url = new URL(request.url);
-  const id = url.searchParams.get('id');
-  if (!id) return Response.json({ error: 'Missing id.' }, { status: 400 });
-
-  await env.DB.prepare('DELETE FROM questions WHERE id = ?').bind(id).run();
-  return Response.json({ ok: true });
-}
+    const { request, env } = context;
+    if (!isTeacherAuthed(request, env)) return unauthorized();
+  
+    const url = new URL(request.url);
+    const id = url.searchParams.get('id');
+    if (!id) return Response.json({ error: 'Missing id.' }, { status: 400 });
+  
+    const db = env.DB;
+  
+    // 1. Delete all student practice submissions recorded for this question
+    await db.prepare('DELETE FROM submissions WHERE question_id = ?').bind(id).run();
+  
+    // 2. Delete any linked vocabulary record tied to this question
+    await db.prepare('DELETE FROM vocabulary WHERE question_id = ?').bind(id).run();
+  
+    // 3. Delete the question itself
+    await db.prepare('DELETE FROM questions WHERE id = ?').bind(id).run();
+  
+    return Response.json({ ok: true });
+  }
