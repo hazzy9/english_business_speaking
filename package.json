@@ -10,6 +10,6 @@
     "db:init:local": "wrangler d1 execute speaking_practice_db --local --file=./schema.sql"
   },
   "devDependencies": {
-    "wrangler": "^3.90.0"
+    "wrangler": "^4.129.0"
   }
 }
