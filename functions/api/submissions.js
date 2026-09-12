@@ -128,43 +128,51 @@ export async function onRequestDelete(context) {
   return Response.json({ ok: true });
 }
 
-// POST /api/submissions  { questionId, transcript, aiFeedback }
+// POST /api/submissions  { questionId, transcript, aiFeedback, audioKey }
 // aiFeedback is a JSON string: {corrections, wordChoices, fillerWords, fluencyScore}
 export async function onRequestPost(context) {
   const { request, env } = context;
   const db = env.DB;
   const body = await request.json().catch(() => ({}));
-  const { questionId, transcript, aiFeedback } = body;
+  const { questionId, transcript, aiFeedback, audioKey } = body;
 
   if (!questionId || !transcript) {
     return Response.json({ error: 'Missing questionId or transcript.' }, { status: 400 });
   }
 
-  const todayCount = await getTodayCount(db);
-  const dailyLimit = await getDailyLimit(db);
+  try {
+    const todayCount = await getTodayCount(db);
+    const dailyLimit = await getDailyLimit(db);
 
-  if (todayCount >= dailyLimit) {
+    if (todayCount >= dailyLimit) {
+      return Response.json(
+        { error: "Today's question limit has been reached.", todayCount, dailyLimit },
+        { status: 429 }
+      );
+    }
+
+    const result = await db
+      .prepare('INSERT INTO submissions (question_id, transcript, ai_feedback, audio_key) VALUES (?, ?, ?, ?)')
+      .bind(questionId, transcript, aiFeedback || '', audioKey || null)
+      .run();
+
+    if (aiFeedback) {
+      await saveVocabulary(db, aiFeedback);
+    }
+
+    return Response.json({
+      ok: true,
+      id: result.meta.last_row_id,
+      todayCount: todayCount + 1,
+      dailyLimit
+    });
+  } catch (err) {
+    console.error('submissions.js onRequestPost failed:', err && err.message ? err.message : err);
     return Response.json(
-      { error: "Today's question limit has been reached.", todayCount, dailyLimit },
-      { status: 429 }
+      { error: 'Could not save your answer.', detail: err && err.message ? err.message : String(err) },
+      { status: 500 }
     );
   }
-
-  const result = await db
-    .prepare('INSERT INTO submissions (question_id, transcript, ai_feedback) VALUES (?, ?, ?)')
-    .bind(questionId, transcript, aiFeedback || '')
-    .run();
-
-  if (aiFeedback) {
-    await saveVocabulary(db, aiFeedback);
-  }
-
-  return Response.json({
-    ok: true,
-    id: result.meta.last_row_id,
-    todayCount: todayCount + 1,
-    dailyLimit
-  });
 }
 
 // PUT /api/submissions  { id, teacherFeedback }  — teacher only
