@@ -128,13 +128,14 @@ export async function onRequestDelete(context) {
   return Response.json({ ok: true });
 }
 
-// POST /api/submissions  { questionId, transcript, aiFeedback }
+// POST /api/submissions  { questionId, transcript, aiFeedback, audioKey }
 // aiFeedback is a JSON string: {corrections, wordChoices, fillerWords, fluencyScore}
+// audioKey is the R2 key from /api/transcribe, or null if the student opted out of saving audio.
 export async function onRequestPost(context) {
   const { request, env } = context;
   const db = env.DB;
   const body = await request.json().catch(() => ({}));
-  const { questionId, transcript, aiFeedback } = body;
+  const { questionId, transcript, aiFeedback, audioKey } = body;
 
   if (!questionId || !transcript) {
     return Response.json({ error: 'Missing questionId or transcript.' }, { status: 400 });
@@ -151,8 +152,8 @@ export async function onRequestPost(context) {
   }
 
   const result = await db
-    .prepare('INSERT INTO submissions (question_id, transcript, ai_feedback) VALUES (?, ?, ?)')
-    .bind(questionId, transcript, aiFeedback || '')
+    .prepare('INSERT INTO submissions (question_id, transcript, ai_feedback, audio_key) VALUES (?, ?, ?, ?)')
+    .bind(questionId, transcript, aiFeedback || '', audioKey || null)
     .run();
 
   if (aiFeedback) {

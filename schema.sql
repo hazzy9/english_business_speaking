@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS submissions (
     ai_feedback TEXT,
     teacher_feedback TEXT,
     status TEXT DEFAULT 'pending', -- 'pending', 'reviewed'
+    audio_key TEXT, -- R2 key for the saved recording, or NULL if the student opted out
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(question_id) REFERENCES questions(id)
 );

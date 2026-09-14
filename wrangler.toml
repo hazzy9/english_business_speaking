@@ -10,6 +10,10 @@ database_id = "4d2177bf-8c1d-4365-8a83-d33beda31467"
 [ai]
 binding = "AI"
 
+[[r2_buckets]]
+binding = "AUDIO_BUCKET"
+bucket_name = "speaking-practice-audio-test"
+
 # TEACHER_PASSWORD is read from env.TEACHER_PASSWORD at runtime.
 # Do NOT put the real password here — this file is committed to git.
 # Set it as a secret instead (see README.md), either via:
