@@ -384,6 +384,19 @@ function render() {
         <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
         <div class="text-sm leading-relaxed mb-1">${escapeHtml(s.transcript)}</div>`;
 
+      if (s.audio_key) {
+        html += `<div class="flex items-center gap-2 mb-3">
+          <audio id="audio-${s.id}" controls preload="none" src="/api/audio?key=${encodeURIComponent(s.audio_key)}" class="h-9 flex-1 max-w-xs"></audio>
+          <select onchange="document.getElementById('audio-${s.id}').playbackRate = parseFloat(this.value)"
+            class="bg-surfaceRaised border border-white/10 rounded-lg px-2 py-1.5 text-xs" title="Playback speed">
+            <option value="1">1x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
+        </div>`;
+      }
+
       if (hasStructured) {
         html += renderFeedbackExtras(fb, s.transcript);
       } else if (fb.raw) {
