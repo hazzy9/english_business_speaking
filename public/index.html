@@ -506,8 +506,8 @@ function render() {
 
 function historyBlock() {
   const scope = state.historyScope;
-  const title = scope === 'week' ? "Your practice — last 7 days" : 'Your past practice';
-  const toggleLabel = scope === 'week' ? 'Back to today' : 'See the past 7 days';
+  const title = scope === 'week' ? "Your practice — last 14 days" : 'Your past practice';
+  const toggleLabel = scope === 'week' ? 'Back to today' : 'See the past 14 days';
   const toggleAction = scope === 'week' ? "loadHistory('today')" : "loadHistory('week')";
 
   let html = `<div class="mt-16 pt-8 border-t border-white/10">
@@ -517,7 +517,7 @@ function historyBlock() {
     </div>`;
 
   if (!state.submissions || state.submissions.length === 0) {
-    html += `<p class="text-muted text-sm">${scope === 'week' ? 'Nothing in the past 7 days yet.' : "Nothing yet today — it'll show up here once you practice."}</p>`;
+    html += `<p class="text-muted text-sm">${scope === 'week' ? 'Nothing in the past 14 days yet.' : "Nothing yet today — it'll show up here once you practice."}</p>`;
     html += `</div>`;
     return html;
   }
