@@ -18,7 +18,11 @@ export async function onRequestPost(context) {
   const buffer = await file.arrayBuffer();
 
   try {
-    const result = await env.AI.run('@cf/openai/whisper', { audio: [...new Uint8Array(buffer)] });
+    const result = await env.AI.run('@cf/openai/whisper-large-v3-turbo', {
+      audio: arrayBufferToBase64(buffer),
+      vad_filter: true,
+      condition_on_previous_text: false
+    });
 
     let audioKey = null;
     if (saveAudio) {
@@ -33,6 +37,19 @@ export async function onRequestPost(context) {
   } catch (err) {
     return Response.json({ error: 'Transcription failed. Please try again.' }, { status: 500 });
   }
+}
+
+// btoa/String.fromCharCode only accept a bounded number of arguments, so a
+// large recording has to be base64-encoded in chunks rather than spread in
+// one call (which throws "Maximum call stack size exceeded" on big files).
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function extensionForMimeType(mime) {
