@@ -42,7 +42,7 @@
 
 <script>
 const state = {
-  phase: 'loading', // loading | idle | recording | transcribing | feedbacking | done | feedback-error | no-speech | limit-reached | mic-denied | error | unsupported
+  phase: 'loading', // loading | idle | recording | review | transcribing | feedbacking | done | feedback-error | no-speech | limit-reached | mic-denied | error | unsupported
   question: null,
   transcript: '',
   aiFeedbackRaw: '',
@@ -60,6 +60,9 @@ let mediaRecorder = null;
 let audioChunks = [];
 let micStream = null;
 let timerHandle = null;
+let discardOnStop = false;
+let recordedBlob = null;
+let recordedUrl = null;
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -196,6 +199,9 @@ async function startRecording() {
     return;
   }
 
+  discardOnStop = false;
+  clearRecordedAudio();
+
   const mimeType = getSupportedMimeType();
   mediaRecorder = new MediaRecorder(micStream, mimeType ? { mimeType } : undefined);
   audioChunks = [];
@@ -209,7 +215,14 @@ async function startRecording() {
   render();
 }
 
+function clearRecordedAudio() {
+  if (recordedUrl) URL.revokeObjectURL(recordedUrl);
+  recordedUrl = null;
+  recordedBlob = null;
+}
+
 function stopRecording() {
+  discardOnStop = false;
   stopTimer();
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
@@ -218,6 +231,29 @@ function stopRecording() {
     micStream.getTracks().forEach((t) => t.stop());
     micStream = null;
   }
+}
+
+// Stops recording mid-take and throws away the audio instead of reviewing it.
+function cancelRecording() {
+  discardOnStop = true;
+  stopTimer();
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+  audioChunks = [];
+  state.phase = 'idle';
+  state.recordingSeconds = 0;
+  render();
+}
+
+// Discards the just-recorded take and starts over from a fresh recording.
+function reRecord() {
+  clearRecordedAudio();
+  startRecording();
 }
 
 function startTimer() {
@@ -232,7 +268,13 @@ function stopTimer() {
   timerHandle = null;
 }
 
-async function handleRecordingStop() {
+function handleRecordingStop() {
+  if (discardOnStop) {
+    discardOnStop = false;
+    audioChunks = [];
+    return;
+  }
+
   const blob = new Blob(audioChunks, { type: (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm' });
   audioChunks = [];
 
@@ -241,6 +283,16 @@ async function handleRecordingStop() {
     render();
     return;
   }
+
+  recordedBlob = blob;
+  recordedUrl = URL.createObjectURL(blob);
+  state.phase = 'review';
+  render();
+}
+
+async function submitForFeedback() {
+  if (!recordedBlob) return;
+  const blob = recordedBlob;
 
   state.phase = 'transcribing';
   render();
@@ -252,6 +304,7 @@ async function handleRecordingStop() {
   try {
     const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
     const data = await res.json();
+    clearRecordedAudio();
     if (!res.ok || !data.text) {
       state.phase = 'no-speech';
       render();
@@ -261,6 +314,7 @@ async function handleRecordingStop() {
     state.audioKey = data.audioKey || null;
     await getFeedback();
   } catch (err) {
+    clearRecordedAudio();
     state.phase = 'error';
     state.errorMessage = 'Transcription failed. Please check your connection and try again.';
     render();
@@ -397,11 +451,24 @@ function render() {
       limitLine;
   } else if (state.phase === 'recording') {
     html = questionBlock(true) +
-      `<div class="flex items-center gap-4">
+      `<div class="flex items-center gap-4 flex-wrap">
         <button class="inline-flex items-center gap-3 bg-record text-paper rounded-full px-7 py-4 font-semibold" onclick="stopRecording()">
           <span class="w-2.5 h-2.5 rounded-full bg-current pulse-dot"></span>Stop recording
         </button>
         <span class="text-muted text-sm tabular-nums" id="rec-timer">00:00</span>
+        <button class="text-muted text-sm underline underline-offset-2 hover:text-paper" onclick="cancelRecording()">Cancel</button>
+      </div>`;
+  } else if (state.phase === 'review') {
+    html = questionBlock(true) +
+      `<div class="border-t border-white/10 pt-5">
+        <div class="text-muted text-xs mb-2">Review your answer — ${formatTime(state.recordingSeconds)}</div>
+        <audio controls class="w-full mb-5" src="${recordedUrl}"></audio>
+        <div class="flex items-center gap-3 flex-wrap">
+          <button class="inline-flex items-center gap-3 bg-gold text-ink rounded-full px-7 py-4 font-semibold hover:scale-[1.02] active:scale-[0.98] transition" onclick="submitForFeedback()">
+            Submit for feedback
+          </button>
+          <button class="border border-white/15 hover:border-gold rounded-full px-6 py-3 text-sm font-medium" onclick="reRecord()">Re-record</button>
+        </div>
       </div>`;
   } else if (state.phase === 'transcribing' || state.phase === 'feedbacking') {
     const label = state.phase === 'transcribing' ? 'Transcribing your answer…' : 'Getting your feedback…';
