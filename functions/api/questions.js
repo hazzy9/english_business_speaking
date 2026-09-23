@@ -19,21 +19,21 @@ export async function onRequestGet(context) {
       .first();
     const lastId = lastIdRow ? Number(lastIdRow.value) : 0;
 
-    const categoryRows = await db.prepare('SELECT DISTINCT category FROM questions').all();
+    const categoryRows = await db.prepare('SELECT DISTINCT category FROM questions WHERE active = 1').all();
     if (!categoryRows.results.length) {
       return Response.json({ error: 'No questions yet — add some from the teacher page.' }, { status: 404 });
     }
     const category = categoryRows.results[Math.floor(Math.random() * categoryRows.results.length)].category;
 
     let question = await db
-      .prepare('SELECT * FROM questions WHERE category = ? AND id != ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
+      .prepare('SELECT * FROM questions WHERE category = ? AND active = 1 AND id != ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
       .bind(category, lastId)
       .first();
 
-    // Falls back to any question in the category (handles a category with only one question)
+    // Falls back to any active question in the category (handles a category with only one question)
     if (!question) {
       question = await db
-        .prepare('SELECT * FROM questions WHERE category = ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
+        .prepare('SELECT * FROM questions WHERE category = ? AND active = 1 ORDER BY times_served ASC, RANDOM() LIMIT 1')
         .bind(category)
         .first();
     }
