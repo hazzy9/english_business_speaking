@@ -40,6 +40,7 @@
 const state = {
   password: '',
   questions: [],
+  editingQuestionId: null,
   categories: [],
   dailyLimit: 3,
   submissions: [],
@@ -157,6 +158,34 @@ async function addQuestion() {
   if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
   state.authError = '';
   promptInput.value = '';
+  await loadAll();
+}
+
+function startEditQuestion(id) {
+  state.editingQuestionId = id;
+  render();
+}
+
+function cancelEditQuestion() {
+  state.editingQuestionId = null;
+  render();
+}
+
+async function saveQuestionEdit(id) {
+  const promptInput = document.getElementById('edit-prompt-' + id);
+  const categoryInput = document.getElementById('edit-category-' + id);
+  const prompt = promptInput.value.trim();
+  const category = categoryInput.value.trim() || 'General';
+  if (!prompt) return;
+
+  const res = await fetch('/api/questions', {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify({ id, prompt, category })
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  state.editingQuestionId = null;
   await loadAll();
 }
 
@@ -318,10 +347,24 @@ function render() {
     Object.keys(grouped).sort().forEach((cat) => {
       html += `<div class="text-muted text-xs mt-4 mb-1">${escapeHtml(cat)}</div>`;
       grouped[cat].forEach((q) => {
-        html += `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-white/5">
-          <span class="text-sm">${escapeHtml(q.prompt)}</span>
-          <button onclick="deleteQuestion(${q.id})" class="text-muted hover:text-record text-xs shrink-0">Delete</button>
-        </div>`;
+        if (state.editingQuestionId === q.id) {
+          html += `<div class="flex flex-wrap items-center gap-2 py-1.5 border-b border-white/5">
+            <input id="edit-prompt-${q.id}" type="text" value="${escapeHtml(q.prompt)}"
+              class="flex-1 min-w-[200px] bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-3 py-1.5 text-sm" />
+            <input id="edit-category-${q.id}" type="text" value="${escapeHtml(q.category)}"
+              class="w-40 bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-3 py-1.5 text-sm" />
+            <button onclick="saveQuestionEdit(${q.id})" class="bg-gold text-ink rounded-lg px-4 py-1.5 text-xs font-semibold shrink-0">Save</button>
+            <button onclick="cancelEditQuestion()" class="text-muted hover:text-paper text-xs shrink-0">Cancel</button>
+          </div>`;
+        } else {
+          html += `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-white/5">
+            <span class="text-sm">${escapeHtml(q.prompt)}</span>
+            <span class="flex items-center gap-3 shrink-0">
+              <button onclick="startEditQuestion(${q.id})" class="text-muted hover:text-gold text-xs">Edit</button>
+              <button onclick="deleteQuestion(${q.id})" class="text-muted hover:text-record text-xs">Delete</button>
+            </span>
+          </div>`;
+        }
       });
     });
   }

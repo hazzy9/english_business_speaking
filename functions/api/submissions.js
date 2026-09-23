@@ -21,9 +21,10 @@ async function getDailyLimit(db) {
 }
 
 // Saves any new word-choice suggestions from this session's feedback into
-// the vocabulary table, and auto-creates a real "Use the word ... in a
-// sentence" question in the Vocabulary category for each new one — so it
-// naturally comes back around through the normal question rotation later.
+// the vocabulary table, so they show up in the teacher page's "Words she's
+// learned" list. Does NOT auto-create a practice question for them anymore —
+// the question bank is curated from actual lesson content now, and letting
+// this insert arbitrary questions into rotation worked against that.
 // Best-effort: failures here never block saving the submission itself.
 async function saveVocabulary(db, aiFeedback) {
   let parsed;
@@ -49,18 +50,9 @@ async function saveVocabulary(db, aiFeedback) {
       if (existing) continue;
 
       const korean = (wc.korean || '').trim();
-      const prompt = korean
-        ? `Use the word "${word}" (${korean}) in a sentence.`
-        : `Use the word "${word}" in a sentence.`;
-
-      const qResult = await db
-        .prepare('INSERT INTO questions (prompt, category) VALUES (?, ?)')
-        .bind(prompt, 'Vocabulary')
-        .run();
-
       await db
-        .prepare('INSERT INTO vocabulary (word, korean, question_id) VALUES (?, ?, ?)')
-        .bind(word, korean, qResult.meta.last_row_id)
+        .prepare('INSERT INTO vocabulary (word, korean) VALUES (?, ?)')
+        .bind(word, korean)
         .run();
     } catch (err) {
       // skip this word, keep going — never let a vocabulary hiccup fail the submission

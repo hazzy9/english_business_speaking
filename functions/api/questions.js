@@ -83,6 +83,26 @@ export async function onRequestPost(context) {
   return Response.json({ ok: true });
 }
 
+// PUT /api/questions  { id, prompt, category }  — teacher only
+export async function onRequestPut(context) {
+  const { request, env } = context;
+  if (!isTeacherAuthed(request, env)) return unauthorized();
+
+  const body = await request.json().catch(() => ({}));
+  const id = body.id;
+  const prompt = (body.prompt || '').trim();
+  const category = (body.category || 'General').trim();
+
+  if (!id) return Response.json({ error: 'Missing id.' }, { status: 400 });
+  if (!prompt) return Response.json({ error: 'A question prompt is required.' }, { status: 400 });
+
+  await env.DB.prepare('UPDATE questions SET prompt = ?, category = ? WHERE id = ?')
+    .bind(prompt, category, id)
+    .run();
+
+  return Response.json({ ok: true });
+}
+
 // DELETE /api/questions?id=123  — teacher only
 // DELETE /api/questions?id=123  — teacher only
 export async function onRequestDelete(context) {
