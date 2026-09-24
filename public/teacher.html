@@ -279,6 +279,20 @@ async function clearToday() {
   await loadAll();
 }
 
+async function cleanupOldAudio() {
+  if (!confirm("Delete audio recordings older than 14 days? Transcripts and feedback stay untouched. This can't be undone.")) return;
+
+  const res = await fetch('/api/submissions?cleanupAudio=1', {
+    method: 'DELETE',
+    headers: { 'X-Teacher-Password': state.password }
+  });
+  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
+  state.authError = '';
+  const data = await res.json();
+  alert((data.cleaned || 0) + ' recording(s) deleted.');
+  await loadAll();
+}
+
 async function deleteSubmission(id) {
   if (!confirm('Delete this recording and its feedback? This cannot be undone.')) return;
 
@@ -388,6 +402,12 @@ function render() {
       <div class="font-serif text-xl mb-4">Reset today</div>
       <p class="text-muted text-sm mb-4">Deletes today's practice sessions and resets today's count back to 0 — handy after testing, so she opens to a clean page. Nothing before today is touched.</p>
       <button onclick="clearToday()" class="border border-record text-record hover:bg-record hover:text-paper rounded-lg px-5 py-2.5 text-sm font-semibold transition">Clear today's sessions</button>
+    </div>
+
+    <div class="border-t border-white/10 pt-8 mb-10">
+      <div class="font-serif text-xl mb-4">Old recordings</div>
+      <p class="text-muted text-sm mb-4">Deletes saved audio for submissions older than 14 days — her transcripts, AI feedback, and your notes for them are kept. Run this whenever you want; nothing happens on its own.</p>
+      <button onclick="cleanupOldAudio()" class="border border-record text-record hover:bg-record hover:text-paper rounded-lg px-5 py-2.5 text-sm font-semibold transition">Clean up recordings older than 14 days</button>
     </div>
 
     <div class="border-t border-white/10 pt-8 mb-10">

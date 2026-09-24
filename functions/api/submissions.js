@@ -95,10 +95,17 @@ export async function onRequestGet(context) {
 
   return Response.json({ submissions: results, todayCount, dailyLimit });
 }
-// DELETE /api/submissions            — teacher only. Clears today's answers
-//                                       and resets today's count.
-// DELETE /api/submissions?id=123     — teacher only. Deletes one specific
-//                                       submission, regardless of its date.
+// DELETE /api/submissions                 — teacher only. Clears today's
+//                                            answers and resets today's count.
+// DELETE /api/submissions?id=123          — teacher only. Deletes one
+//                                            specific submission, regardless
+//                                            of its date.
+// DELETE /api/submissions?cleanupAudio=1  — teacher only. Deletes the saved
+//                                            R2 recording for every submission
+//                                            older than 14 days. Leaves the
+//                                            transcript, AI feedback, and
+//                                            teacher notes untouched — only
+//                                            the audio file and its key go.
 export async function onRequestDelete(context) {
   const { request, env } = context;
   if (!isTeacherAuthed(request, env)) return unauthorized();
@@ -106,6 +113,30 @@ export async function onRequestDelete(context) {
   const db = env.DB;
   const url = new URL(request.url);
   const id = url.searchParams.get('id');
+
+  if (url.searchParams.get('cleanupAudio') === '1') {
+    const { results } = await db
+      .prepare("SELECT id, audio_key FROM submissions WHERE audio_key IS NOT NULL AND created_at < datetime('now', '-14 days')")
+      .all();
+
+    for (const row of results) {
+      try {
+        await env.AUDIO_BUCKET.delete(row.audio_key);
+      } catch (err) {
+        // an already-missing R2 object shouldn't block clearing the rest
+      }
+    }
+
+    if (results.length) {
+      const ids = results.map((r) => r.id);
+      await db
+        .prepare(`UPDATE submissions SET audio_key = NULL WHERE id IN (${ids.map(() => '?').join(',')})`)
+        .bind(...ids)
+        .run();
+    }
+
+    return Response.json({ ok: true, cleaned: results.length });
+  }
 
   if (id) {
     await db.prepare('DELETE FROM submissions WHERE id = ?').bind(id).run();
