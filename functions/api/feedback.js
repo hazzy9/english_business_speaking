@@ -28,12 +28,13 @@ export async function onRequestPost(context) {
   - fillerWords should list each distinct filler word actually present (e.g. um, uh, like, you know) — empty array if none.
   - fluencyScore is an integer 1-5, where 5 is very fluent and natural for a spoken answer.
   - Only include real mistakes in corrections and wordChoices — empty arrays are fine.
+  - List at most 6 corrections and 4 word choices — pick the most useful ones, not every possible issue. This keeps the JSON short enough to always finish.
   - Output nothing except the JSON object.`;
-  
+
     try {
       const result = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', {
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 400
+        max_tokens: 700
       });
   
       // Defensive: don't assume the result shape. Different Workers AI model
@@ -53,6 +54,15 @@ export async function onRequestPost(context) {
       raw = raw.trim();
   
       const parsed = parseFeedbackJson(raw);
+      if (!parsed) {
+        // The model's JSON was malformed or got cut off mid-object — this
+        // happens on longer/messier transcripts that push it past its token
+        // budget. Never surface that broken text as if it were real
+        // feedback; treat it the same as a failed request so the frontend
+        // shows its existing "couldn't generate feedback" message instead.
+        console.error('feedback.js could not parse model JSON:', raw);
+        return Response.json({ error: 'Feedback generation failed. Please try again.' }, { status: 502 });
+      }
       return Response.json({ feedback: JSON.stringify(parsed) });
     } catch (err) {
       console.error('feedback.js AI.run failed:', err && err.message ? err.message : err);
@@ -65,20 +75,19 @@ export async function onRequestPost(context) {
   
   // Defensive parsing: small models sometimes wrap JSON in ```json fences
   // despite instructions not to, or add a stray sentence. Strip common
-  // wrappers and fall back to a safe empty shape (plus the raw text) rather
-  // than ever throwing — a malformed response should degrade gracefully,
-  // not break the save.
+  // wrappers first. Returns null (never the broken raw text) if the result
+  // still isn't valid JSON — the caller treats that as a failed request.
   function parseFeedbackJson(raw) {
     let text = raw.trim();
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fenced) text = fenced[1].trim();
-  
+
     const firstBrace = text.indexOf('{');
     const lastBrace = text.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
       text = text.slice(firstBrace, lastBrace + 1);
     }
-  
+
     try {
       const obj = JSON.parse(text);
       return {
@@ -88,6 +97,6 @@ export async function onRequestPost(context) {
         fluencyScore: Number.isInteger(obj.fluencyScore) ? obj.fluencyScore : null
       };
     } catch (err) {
-      return { corrections: [], wordChoices: [], fillerWords: [], fluencyScore: null, raw };
+      return null;
     }
   }
