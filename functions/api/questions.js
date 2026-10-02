@@ -117,11 +117,8 @@ export async function onRequestDelete(context) {
   
     // 1. Delete all student practice submissions recorded for this question
     await db.prepare('DELETE FROM submissions WHERE question_id = ?').bind(id).run();
-  
-    // 2. Delete any linked vocabulary record tied to this question
-    await db.prepare('DELETE FROM vocabulary WHERE question_id = ?').bind(id).run();
-  
-    // 3. Delete the question itself
+
+    // 2. Delete the question itself
     await db.prepare('DELETE FROM questions WHERE id = ?').bind(id).run();
   
     return Response.json({ ok: true });

@@ -20,46 +20,6 @@ async function getDailyLimit(db) {
   return row ? Number(row.value) : 3;
 }
 
-// Saves any new word-choice suggestions from this session's feedback into
-// the vocabulary table, so they show up in the teacher page's "Words she's
-// learned" list. Does NOT auto-create a practice question for them anymore —
-// the question bank is curated from actual lesson content now, and letting
-// this insert arbitrary questions into rotation worked against that.
-// Best-effort: failures here never block saving the submission itself.
-async function saveVocabulary(db, aiFeedback) {
-  let parsed;
-  try {
-    parsed = JSON.parse(aiFeedback);
-  } catch (err) {
-    return;
-  }
-  const wordChoices = Array.isArray(parsed.wordChoices) ? parsed.wordChoices : [];
-  if (wordChoices.length === 0) return;
-
-  const seen = new Set();
-  for (const wc of wordChoices) {
-    const word = (wc.better || '').trim();
-    if (!word || seen.has(word.toLowerCase())) continue;
-    seen.add(word.toLowerCase());
-
-    try {
-      const existing = await db
-        .prepare('SELECT id FROM vocabulary WHERE word = ? COLLATE NOCASE')
-        .bind(word)
-        .first();
-      if (existing) continue;
-
-      const korean = (wc.korean || '').trim();
-      await db
-        .prepare('INSERT INTO vocabulary (word, korean) VALUES (?, ?)')
-        .bind(word, korean)
-        .run();
-    } catch (err) {
-      // skip this word, keep going — never let a vocabulary hiccup fail the submission
-    }
-  }
-}
-
 // GET /api/submissions                      -> full history (teacher page), plus a
 //                                               category breakdown of everything answered
 // GET /api/submissions?scope=today          -> only today's submissions (student's main view)
@@ -211,10 +171,6 @@ export async function onRequestPost(context) {
     .prepare('INSERT INTO submissions (question_id, transcript, ai_feedback, audio_key) VALUES (?, ?, ?, ?)')
     .bind(questionId, transcript, aiFeedback || '', audioKey || null)
     .run();
-
-  if (aiFeedback) {
-    await saveVocabulary(db, aiFeedback);
-  }
 
   return Response.json({
     ok: true,

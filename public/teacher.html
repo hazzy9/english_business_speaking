@@ -45,7 +45,6 @@ const state = {
   dailyLimit: 3,
   submissions: [],
   categoryBreakdown: [],
-  vocabulary: [],
   loaded: false,
   authError: '',
   summary: null,
@@ -216,23 +215,20 @@ function authHeaders() {
 }
 
 async function loadAll() {
-  const [qRes, sRes, subRes, vocabRes] = await Promise.all([
+  const [qRes, sRes, subRes] = await Promise.all([
     fetch('/api/questions'),
     fetch('/api/settings'),
-    fetch('/api/submissions'),
-    fetch('/api/vocabulary')
+    fetch('/api/submissions')
   ]);
   const qData = await qRes.json();
   const sData = await sRes.json();
   const subData = await subRes.json();
-  const vocabData = await vocabRes.json();
 
   state.questions = qData.questions || [];
   state.categories = sData.categories || [];
   state.dailyLimit = sData.dailyLimit || 3;
   state.submissions = subData.submissions || [];
   state.categoryBreakdown = subData.categoryBreakdown || [];
-  state.vocabulary = vocabData.vocabulary || [];
   state.loaded = true;
   render();
 }
@@ -289,16 +285,6 @@ async function saveQuestionEdit(id) {
 
 async function deleteQuestion(id) {
   const res = await fetch('/api/questions?id=' + id, {
-    method: 'DELETE',
-    headers: { 'X-Teacher-Password': state.password }
-  });
-  if (res.status === 401) { state.authError = 'Incorrect teacher password.'; render(); return; }
-  state.authError = '';
-  await loadAll();
-}
-
-async function deleteVocabulary(id) {
-  const res = await fetch('/api/vocabulary?id=' + id, {
     method: 'DELETE',
     headers: { 'X-Teacher-Password': state.password }
   });
@@ -528,24 +514,6 @@ function render() {
       <p class="text-muted text-sm mb-4">Deletes saved audio for submissions older than 14 days — her transcripts, AI feedback, and your notes for them are kept. Run this whenever you want; nothing happens on its own.</p>
       <button onclick="cleanupOldAudio()" class="border border-record text-record hover:bg-record hover:text-paper rounded-lg px-5 py-2.5 text-sm font-semibold transition">Clean up recordings older than 14 days</button>
     </div>
-
-    <div class="border-t border-white/10 pt-8 mb-10">
-      <div class="font-serif text-xl mb-4">Words she's learned</div>`;
-
-  if (state.vocabulary.length === 0) {
-    html += `<p class="text-muted text-sm">No word corrections saved yet — they'll show up here as she practices.</p>`;
-  } else {
-    html += `<div class="space-y-1">`;
-    state.vocabulary.forEach((v) => {
-      html += `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-white/5">
-        <span class="text-sm">${escapeHtml(v.word)}${v.korean ? ' <span class="text-muted">(' + escapeHtml(v.korean) + ')</span>' : ''}</span>
-        <button onclick="deleteVocabulary(${v.id})" class="text-muted hover:text-record text-xs shrink-0">Remove</button>
-      </div>`;
-    });
-    html += `</div>`;
-  }
-
-  html += `</div>
 
     <div class="border-t border-white/10 pt-8">
       <div class="font-serif text-xl mb-4">Submissions</div>`;
