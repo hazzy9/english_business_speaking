@@ -60,9 +60,18 @@ async function saveVocabulary(db, aiFeedback) {
   }
 }
 
-// GET /api/submissions             -> full history (teacher page)
-// GET /api/submissions?scope=today -> only today's submissions (student's main view)
-// GET /api/submissions?scope=week  -> last 7 days (student's "My records" view)
+// GET /api/submissions                      -> full history (teacher page), plus a
+//                                               category breakdown of everything answered
+// GET /api/submissions?scope=today          -> only today's submissions (student's main view)
+// GET /api/submissions?scope=week           -> last 14 days (student's "My records" view —
+//                                               matches the 14-day audio retention window, so
+//                                               any recording she can still listen to is
+//                                               reachable from here)
+// GET /api/submissions?scope=new-feedback   -> submissions (within the last 14 days) whose
+//                                               teacher feedback was added/updated in the last
+//                                               24 hours — feeds the student page's
+//                                               "New Feedback" section. Ordered by when she
+//                                               recorded the answer, not when it was reviewed.
 export async function onRequestGet(context) {
   const { request, env } = context;
   const db = env.DB;
@@ -74,6 +83,7 @@ export async function onRequestGet(context) {
        JOIN questions ON submissions.question_id = questions.id`;
 
   let results;
+  let categoryBreakdown;
   if (scope === 'today') {
     const row = await db
       .prepare(`${baseQuery} WHERE date(submissions.created_at, ?) = date('now', ?) ORDER BY submissions.created_at DESC`)
@@ -82,18 +92,41 @@ export async function onRequestGet(context) {
     results = row.results;
   } else if (scope === 'week') {
     const row = await db
-      .prepare(`${baseQuery} WHERE submissions.created_at >= datetime('now', '-7 days') ORDER BY submissions.created_at DESC`)
+      .prepare(`${baseQuery} WHERE submissions.created_at >= datetime('now', '-14 days') ORDER BY submissions.created_at DESC`)
+      .all();
+    results = row.results;
+  } else if (scope === 'new-feedback') {
+    const row = await db
+      .prepare(
+        `${baseQuery} WHERE submissions.created_at >= datetime('now', '-14 days')
+           AND submissions.feedback_updated_at >= datetime('now', '-24 hours')
+         ORDER BY submissions.created_at DESC`
+      )
       .all();
     results = row.results;
   } else {
     const row = await db.prepare(`${baseQuery} ORDER BY submissions.created_at DESC`).all();
     results = row.results;
+
+    const catRow = await db
+      .prepare(
+        `SELECT questions.category as category, COUNT(*) as count
+         FROM submissions JOIN questions ON submissions.question_id = questions.id
+         GROUP BY questions.category ORDER BY count DESC`
+      )
+      .all();
+    const total = catRow.results.reduce((sum, r) => sum + r.count, 0);
+    categoryBreakdown = catRow.results.map((r) => ({
+      category: r.category,
+      count: r.count,
+      percent: total ? Math.round((r.count / total) * 100) : 0
+    }));
   }
 
   const todayCount = await getTodayCount(db);
   const dailyLimit = await getDailyLimit(db);
 
-  return Response.json({ submissions: results, todayCount, dailyLimit });
+  return Response.json({ submissions: results, todayCount, dailyLimit, categoryBreakdown });
 }
 // DELETE /api/submissions                 — teacher only. Clears today's
 //                                            answers and resets today's count.
@@ -201,7 +234,7 @@ export async function onRequestPut(context) {
   if (!id) return Response.json({ error: 'Missing id.' }, { status: 400 });
 
   await env.DB.prepare(
-    "UPDATE submissions SET teacher_feedback = ?, status = 'reviewed' WHERE id = ?"
+    "UPDATE submissions SET teacher_feedback = ?, status = 'reviewed', feedback_updated_at = CURRENT_TIMESTAMP WHERE id = ?"
   )
     .bind(teacherFeedback || '', id)
     .run();
