@@ -33,6 +33,7 @@
   .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .spinner { animation: spin 0.8s linear infinite; }
+  .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 </style>
 </head>
 <body class="bg-ink text-paper font-sans min-h-screen">
@@ -42,7 +43,7 @@
 
 <script>
 const state = {
-  phase: 'loading', // loading | idle | recording | review | transcribing | feedbacking | done | feedback-error | no-speech | limit-reached | mic-denied | error | unsupported
+  phase: 'loading', // loading | idle | no-questions | recording | review | transcribing | feedbacking | done | feedback-error | no-speech | limit-reached | mic-denied | error | unsupported
   question: null,
   transcript: '',
   aiFeedbackRaw: '',
@@ -172,7 +173,7 @@ async function loadInitial() {
       state.newFeedback = nfData.submissions || [];
     }
 
-    state.phase = state.todayCount >= state.dailyLimit ? 'limit-reached' : 'idle';
+    state.phase = state.todayCount >= state.dailyLimit ? 'limit-reached' : (state.question ? 'idle' : 'no-questions');
   } catch (err) {
     state.phase = 'error';
     state.errorMessage = "Couldn't load the page. Check your connection and refresh.";
@@ -187,9 +188,11 @@ async function pickNewQuestion() {
     if (res.ok) {
       const data = await res.json();
       state.question = data.question;
+    } else if (res.status === 404) {
+      state.question = null; // every available question has been answered
     }
   } catch (err) { /* keep the current question if this fails */ }
-  state.phase = state.todayCount >= state.dailyLimit ? 'limit-reached' : 'idle';
+  state.phase = state.todayCount >= state.dailyLimit ? 'limit-reached' : (state.question ? 'idle' : 'no-questions');
   state.transcript = '';
   state.aiFeedbackRaw = '';
   render();
@@ -431,9 +434,9 @@ function toggleSaveAudio(checked) {
   state.saveAudio = checked;
 }
 
-function expandNewFeedback() {
-  state.newFeedbackExpanded = true;
-  logEvent('new_feedback_expanded');
+function toggleNewFeedback() {
+  state.newFeedbackExpanded = !state.newFeedbackExpanded;
+  if (state.newFeedbackExpanded) logEvent('new_feedback_expanded');
   render();
 }
 
@@ -527,9 +530,70 @@ function toggleVolFlyout(id) {
   document.getElementById('volflyout-' + id).classList.toggle('hidden');
 }
 
+// The moment (ms since epoch) a teacher's note stops counting as "new", or 0
+// if it has no note. Computed from the timestamp the server already sends
+// with every submission, so no extra column or request is needed.
+// `+ 'Z'` marks SQLite's timestamp as UTC.
+function feedbackExpiresAt(s) {
+  if (!s.feedback_updated_at || !(s.teacher_feedback && s.teacher_feedback.trim())) return 0;
+  return new Date(s.feedback_updated_at.replace(' ', 'T') + 'Z').getTime() + 24 * 60 * 60 * 1000;
+}
+
+function isNewFeedback(s) {
+  return feedbackExpiresAt(s) > Date.now();
+}
+
+// Makes markers (and New Feedback entries) vanish at the 24h mark without a
+// reload. Redrawing the whole page would cut off playing audio and reset
+// "Show more" toggles, so this removes only what expired: one timer is set
+// for the soonest expiry, deletes the expired marker tags, and rebuilds just
+// the New Feedback card if its entry count changed.
+let expiryTimer = null;
+function scheduleMarkerExpiry() {
+  clearTimeout(expiryTimer);
+  const upcoming = [...(state.newFeedback || []), ...(state.submissions || [])]
+    .map(feedbackExpiresAt).filter((t) => t > Date.now());
+  if (!upcoming.length) return;
+  expiryTimer = setTimeout(expireMarkers, Math.min(...upcoming) - Date.now() + 500);
+}
+
+function expireMarkers() {
+  const now = Date.now();
+  document.querySelectorAll('[data-expires]').forEach((el) => {
+    if (Number(el.dataset.expires) <= now) el.remove();
+  });
+  const slot = document.getElementById('nf-slot');
+  if (slot && slot.dataset.count !== String(newFeedbackItems().length)) {
+    slot.innerHTML = newFeedbackBlock();
+    slot.dataset.count = String(newFeedbackItems().length);
+    setupClamps();
+  }
+  scheduleMarkerExpiry();
+}
+
+// A laptop that slept past an expiry won't have fired its timer on time.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) expireMarkers(); });
+
+// Reveals each "Show more" link only for transcripts that actually overflow
+// the 2-line clamp, so short answers don't get a pointless link. Runs after
+// every render (the DOM is rebuilt each time) and again once web fonts load,
+// since a font swap can change where lines wrap.
+function setupClamps() {
+  document.querySelectorAll('[data-clamp]').forEach((el) => {
+    const btn = el.nextElementSibling;
+    if (btn && el.scrollHeight > el.clientHeight + 1) btn.classList.remove('hidden');
+  });
+}
+
+function toggleClamp(btn) {
+  const collapsed = btn.previousElementSibling.classList.toggle('clamp2');
+  btn.textContent = collapsed ? 'Show more' : 'Show less';
+}
+
 // Shared by the "New Feedback" section and the history list below —
-// one submission's transcript, audio (if saved), AI feedback, and
-// teacher's note (if any). A submission can render in both sections at
+// one submission's transcript, audio (if saved), and teacher's note (if
+// any). The AI word-choices box is deliberately not shown here: she sees it
+// once, right after answering. A submission can render in both sections at
 // once (recent + from today), so `context` keeps each audio player's DOM
 // ids unique — reusing the raw submission id would collide and break
 // getElementById lookups for whichever copy rendered second.
@@ -538,26 +602,31 @@ function renderSubmissionEntry(s, context) {
   const hasStructured = fb.corrections.length || fb.wordChoices.length || fb.fillerWords.length || fb.fluencyScore;
   const isTeacherReviewed = !!(s.teacher_feedback && s.teacher_feedback.trim());
 
+  const marker = isNewFeedback(s)
+    ? `<span data-expires="${feedbackExpiresAt(s)}" class="inline-flex items-center gap-[5px] text-[10.5px] font-semibold text-gold"><span class="block w-[7px] h-[7px] rounded-full bg-gold"></span>New</span>`
+    : '';
+
   let html = `<div class="py-5 border-t border-white/10 first:border-t-0 first:pt-0">
-    <div class="text-muted text-xs mb-1">${formatDate(s.created_at)}</div>
+    <div class="flex items-center gap-2 text-muted text-xs mb-1"><span>${formatDate(s.created_at)}</span>${marker}</div>
     <div class="font-serif text-lg mb-2">${escapeHtml(s.question_prompt)}</div>
-    <div class="text-sm leading-relaxed mb-1">${escapeHtml(s.transcript)}</div>`;
+    <div data-clamp class="clamp2 text-sm leading-relaxed">${escapeHtml(s.transcript)}</div>
+    <button class="hidden text-muted text-xs underline underline-offset-2 hover:text-paper mt-1" onclick="toggleClamp(this)">Show more</button>`;
 
   if (s.audio_key) {
     html += renderAudioPlayer(context + '-' + s.id, s.audio_key);
   }
 
-  if (hasStructured) {
-    html += renderFeedbackExtras(fb, s.transcript);
-  } else if (fb.raw) {
+  // Legacy entries saved as plain text before the structured format existed
+  // have nothing else to show, so keep displaying that text.
+  if (!hasStructured && fb.raw) {
     html += `<div class="text-sm leading-relaxed text-muted italic mb-3">${escapeHtml(fb.raw)}</div>`;
   }
 
   if (isTeacherReviewed) {
-    html += `<div class="text-xs text-gold mb-1">Teacher's note</div>
+    html += `<div class="text-xs text-gold mt-3 mb-1">Teacher's note</div>
       <div class="text-sm leading-relaxed bg-surfaceRaised border-l-2 border-gold pl-4 py-2 rounded-r-lg whitespace-pre-wrap">${escapeHtml(s.teacher_feedback)}</div>`;
   } else {
-    html += `<div class="text-xs text-muted italic">Waiting for your teacher's feedback</div>`;
+    html += `<div class="text-xs text-muted italic mt-3">Waiting for your teacher's feedback</div>`;
   }
   html += `</div>`;
   return html;
@@ -565,22 +634,28 @@ function renderSubmissionEntry(s, context) {
 
 // Shows submissions reviewed by the teacher in the last 24 hours — only
 // one visible at first (she may batch-review several at once), the rest
-// behind "Show N more". Disappears once nothing qualifies, regardless of
-// whether she's looked — no read/unread tracking, just a 24h window.
+// behind "Show N more" / "Show less". Disappears once nothing qualifies,
+// regardless of whether she's looked — no read/unread tracking, just a 24h
+// window. The outlined, tinted card sets it apart from the history below.
+function newFeedbackItems() {
+  return (state.newFeedback || []).filter(isNewFeedback);
+}
+
 function newFeedbackBlock() {
-  const items = state.newFeedback || [];
+  const items = newFeedbackItems();
   if (!items.length) return '';
 
-  const visibleCount = state.newFeedbackExpanded ? items.length : 1;
-  const remaining = items.length - visibleCount;
+  const visible = state.newFeedbackExpanded ? items : items.slice(0, 1);
 
-  let html = `<div class="mt-16 pt-8 border-t border-white/10">
-    <div class="font-serif text-xl mb-6">New Feedback</div>`;
+  let html = `<div class="mt-16 rounded-[14px] border border-gold/40 bg-gold/5 px-5 py-5">
+    <div class="font-serif text-xl mb-2">New Feedback</div><div>`;
 
-  items.slice(0, visibleCount).forEach((s) => { html += renderSubmissionEntry(s, 'nf'); });
+  visible.forEach((s) => { html += renderSubmissionEntry(s, 'nf'); });
+  html += `</div>`;
 
-  if (remaining > 0) {
-    html += `<button class="text-muted text-xs underline underline-offset-2 hover:text-paper mt-2" onclick="expandNewFeedback()">Show ${remaining} more</button>`;
+  if (items.length > 1) {
+    const label = state.newFeedbackExpanded ? 'Show less' : `Show ${items.length - 1} more`;
+    html += `<button class="text-muted text-xs underline underline-offset-2 hover:text-paper mt-2" onclick="toggleNewFeedback()">${label}</button>`;
   }
 
   html += `</div>`;
@@ -611,6 +686,9 @@ function render() {
   } else if (state.phase === 'limit-reached') {
     html = questionBlock(true) +
       `<div class="text-base leading-relaxed text-muted">You've used all your practice questions for today. Come back tomorrow!</div>` +
+      limitLine;
+  } else if (state.phase === 'no-questions') {
+    html = `<div class="text-base leading-relaxed text-muted">You've answered every question for now. Your teacher will add new ones soon!</div>` +
       limitLine;
   } else if (state.phase === 'idle') {
     html = questionBlock(false) +
@@ -676,9 +754,11 @@ function render() {
       limitLine;
   }
 
-  html += newFeedbackBlock();
+  html += `<div id="nf-slot" data-count="${newFeedbackItems().length}">${newFeedbackBlock()}</div>`;
   html += historyBlock();
   app.innerHTML = html;
+  setupClamps();
+  scheduleMarkerExpiry();
 }
 
 function historyBlock() {
@@ -705,6 +785,7 @@ function historyBlock() {
   return html;
 }
 
+if (document.fonts) document.fonts.ready.then(setupClamps);
 loadInitial();
 </script>
 </body>

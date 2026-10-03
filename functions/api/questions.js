@@ -1,13 +1,23 @@
 import { isTeacherAuthed, unauthorized } from './_auth.js';
 
-// GET /api/questions            -> full list, for the teacher page to manage
+// "Answered" is derived from the submissions table each time rather than
+// stored as a flag, so it can't drift out of sync: delete a submission and
+// its question is unanswered again. The rows themselves are never deleted
+// because her history and the category chart join submissions to questions.
+const UNANSWERED =
+  'NOT EXISTS (SELECT 1 FROM submissions WHERE submissions.question_id = questions.id)';
+// What she can be served: switched on AND never answered.
+const AVAILABLE = `active = 1 AND ${UNANSWERED}`;
+
+// GET /api/questions            -> unanswered questions, for the teacher page to manage
 // GET /api/questions?next=1     -> one question for the student page. Picks a
 //                                   random category (equal chance each, so a
 //                                   category with lots of questions doesn't
 //                                   dominate), then the least-served question
 //                                   within it — so she gets a mix of category
-//                                   types across her daily questions, and
-//                                   nothing repeats until its category cycles.
+//                                   types across her daily questions. Questions
+//                                   she has already answered are never served
+//                                   again; 404 once none are left.
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -19,23 +29,27 @@ export async function onRequestGet(context) {
       .first();
     const lastId = lastIdRow ? Number(lastIdRow.value) : 0;
 
-    const categoryRows = await db.prepare('SELECT DISTINCT category FROM questions WHERE active = 1').all();
+    const categoryRows = await db.prepare(`SELECT DISTINCT category FROM questions WHERE ${AVAILABLE}`).all();
     if (!categoryRows.results.length) {
-      return Response.json({ error: 'No questions yet — add some from the teacher page.' }, { status: 404 });
+      return Response.json({ error: 'No unanswered questions left.' }, { status: 404 });
     }
     const category = categoryRows.results[Math.floor(Math.random() * categoryRows.results.length)].category;
 
     let question = await db
-      .prepare('SELECT * FROM questions WHERE category = ? AND active = 1 AND id != ? ORDER BY times_served ASC, RANDOM() LIMIT 1')
+      .prepare(`SELECT * FROM questions WHERE category = ? AND ${AVAILABLE} AND id != ? ORDER BY times_served ASC, RANDOM() LIMIT 1`)
       .bind(category, lastId)
       .first();
 
-    // Falls back to any active question in the category (handles a category with only one question)
+    // Falls back to any available question in the category (handles a category with only one left)
     if (!question) {
       question = await db
-        .prepare('SELECT * FROM questions WHERE category = ? AND active = 1 ORDER BY times_served ASC, RANDOM() LIMIT 1')
+        .prepare(`SELECT * FROM questions WHERE category = ? AND ${AVAILABLE} ORDER BY times_served ASC, RANDOM() LIMIT 1`)
         .bind(category)
         .first();
+    }
+
+    if (!question) {
+      return Response.json({ error: 'No unanswered questions left.' }, { status: 404 });
     }
 
     await db
@@ -56,8 +70,9 @@ export async function onRequestGet(context) {
     return Response.json({ question });
   }
 
+  // Teacher's list: answered questions are hidden (they're spent), not deleted.
   const { results } = await db
-    .prepare('SELECT * FROM questions ORDER BY category, created_at DESC')
+    .prepare(`SELECT * FROM questions WHERE ${UNANSWERED} ORDER BY category, created_at DESC`)
     .all();
 
   return Response.json({ questions: results });
