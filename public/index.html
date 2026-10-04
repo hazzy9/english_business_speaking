@@ -37,7 +37,7 @@
 </style>
 </head>
 <body class="bg-ink text-paper font-sans min-h-screen">
-<div class="max-w-xl mx-auto px-6 py-14" id="app">
+<div class="max-w-3xl mx-auto px-6 py-14" id="app">
   <p class="text-muted text-sm">Loading…</p>
 </div>
 
@@ -446,7 +446,7 @@ function toggleNewFeedback() {
 // page at once — playing one pauses any other that's currently playing.
 function renderAudioPlayer(id, audioKey) {
   const aid = 'audio-' + id;
-  return `<div class="flex items-center gap-2 mb-3 mt-2 w-fit">
+  return `<div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-3 mt-2 w-fit max-w-full">
     <audio id="${aid}" preload="none" src="/api/audio?key=${encodeURIComponent(audioKey)}"
       ontimeupdate="updatePlayerUI('${id}')" onloadedmetadata="updatePlayerUI('${id}')"
       onended="updatePlayIcon('${id}')" class="hidden"></audio>
@@ -458,6 +458,7 @@ function renderAudioPlayer(id, audioKey) {
       <div id="fill-${id}" class="absolute left-0 top-0 h-full w-0 bg-gold rounded-full"></div>
     </div>
     <span id="time-${id}" class="text-[10.5px] text-muted tabular-nums whitespace-nowrap">00:00 / 00:00</span>
+    <div class="flex items-center gap-2 shrink-0">
     <div class="flex gap-[3px] shrink-0">
       <button onclick="setAudioSpeed('${id}', 1, this)" class="w-[26px] text-center rounded-full border border-gold text-gold text-[10px] py-0.5">1x</button>
       <button onclick="setAudioSpeed('${id}', 1.5, this)" class="w-[26px] text-center rounded-full border border-white/15 text-muted text-[10px] py-0.5">1.5x</button>
@@ -472,6 +473,7 @@ function renderAudioPlayer(id, audioKey) {
         <input type="range" min="0" max="100" value="100" class="accent-gold w-[70px]"
           oninput="document.getElementById('${aid}').volume = this.value / 100">
       </div>
+    </div>
     </div>
   </div>`;
 }

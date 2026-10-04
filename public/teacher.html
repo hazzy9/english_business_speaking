@@ -86,7 +86,7 @@ function formatTime(sec) {
 // that's currently playing. Same component as the student page.
 function renderAudioPlayer(id, audioKey) {
   const aid = 'audio-' + id;
-  return `<div class="flex items-center gap-2 mb-3 mt-2 w-fit">
+  return `<div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-3 mt-2 w-fit max-w-full">
     <audio id="${aid}" preload="none" src="/api/audio?key=${encodeURIComponent(audioKey)}"
       ontimeupdate="updatePlayerUI('${id}')" onloadedmetadata="updatePlayerUI('${id}')"
       onended="updatePlayIcon('${id}')" class="hidden"></audio>
@@ -98,6 +98,7 @@ function renderAudioPlayer(id, audioKey) {
       <div id="fill-${id}" class="absolute left-0 top-0 h-full w-0 bg-gold rounded-full"></div>
     </div>
     <span id="time-${id}" class="text-[10.5px] text-muted tabular-nums whitespace-nowrap">00:00 / 00:00</span>
+    <div class="flex items-center gap-2 shrink-0">
     <div class="flex gap-[3px] shrink-0">
       <button onclick="setAudioSpeed('${id}', 1, this)" class="w-[26px] text-center rounded-full border border-gold text-gold text-[10px] py-0.5">1x</button>
       <button onclick="setAudioSpeed('${id}', 1.5, this)" class="w-[26px] text-center rounded-full border border-white/15 text-muted text-[10px] py-0.5">1.5x</button>
@@ -112,6 +113,7 @@ function renderAudioPlayer(id, audioKey) {
         <input type="range" min="0" max="100" value="100" class="accent-gold w-[70px]"
           oninput="document.getElementById('${aid}').volume = this.value / 100">
       </div>
+    </div>
     </div>
   </div>`;
 }
@@ -410,7 +412,15 @@ async function deleteSubmission(id) {
 
 function genRender() {
   const slot = document.getElementById('gen-slot');
-  if (slot) slot.innerHTML = genBlock();
+  if (!slot) return;
+  slot.innerHTML = genBlock();
+  slot.querySelectorAll('textarea.gen-draft').forEach(genGrow);
+}
+
+// Draft boxes grow to show the whole question instead of cutting it off.
+function genGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
 }
 
 function genToggle(i) {
@@ -501,7 +511,7 @@ async function genAdd() {
   const g = state.gen;
   const questions = g.drafts
     .filter((d) => d.keep && d.text.trim())
-    .map((d) => ({ prompt: d.text.trim(), category: d.category }));
+    .map((d) => ({ prompt: d.text.replace(/\s+/g, ' ').trim(), category: d.category }));
   if (!questions.length) return;
 
   g.phase = 'busy';
@@ -583,10 +593,10 @@ function genReviewBlock() {
     if (g.notices[cat]) html += `<p class="text-muted text-xs mb-1">${escapeHtml(g.notices[cat])}</p>`;
     g.drafts.forEach((d, i) => {
       if (d.category !== cat) return;
-      html += `<div class="flex items-center gap-3 py-1.5">
-        <input type="checkbox" ${d.keep ? 'checked' : ''} onchange="genKeep(${i}, this.checked)" class="accent-gold w-4 h-4 shrink-0">
-        <input type="text" value="${escapeHtml(d.text)}" oninput="genEdit(${i}, this.value)"
-          class="flex-1 min-w-0 bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-3 py-2 text-sm">
+      html += `<div class="flex items-start gap-3 py-1.5">
+        <input type="checkbox" ${d.keep ? 'checked' : ''} onchange="genKeep(${i}, this.checked)" class="accent-gold w-4 h-4 shrink-0 mt-3">
+        <textarea rows="1" oninput="genEdit(${i}, this.value); genGrow(this)"
+          class="gen-draft flex-1 min-w-0 resize-none overflow-hidden leading-snug bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-3 py-2 text-sm">${escapeHtml(d.text)}</textarea>
       </div>`;
     });
     html += `</div>`;
@@ -771,6 +781,7 @@ function render() {
 
   html += `</div>`;
   app.innerHTML = html;
+  document.querySelectorAll('textarea.gen-draft').forEach(genGrow);
 }
 
 loadAll();
