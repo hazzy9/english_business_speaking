@@ -37,9 +37,18 @@
 <div class="max-w-3xl mx-auto px-6 py-14" id="app"></div>
 
 <script>
+const GEN_MAX = 15;
+const GEN_DEFAULT = 3;
+
+function genInitial() {
+  return { notes: '', counts: {}, phase: 'form', busyText: '', drafts: [], order: [], notices: {}, error: '', message: '' };
+}
+
 const state = {
   password: '',
   questions: [],
+  stock: [],
+  gen: genInitial(),
   editingQuestionId: null,
   categories: [],
   dailyLimit: 3,
@@ -51,10 +60,12 @@ const state = {
   summaryLoading: false
 };
 
+// Also escapes double quotes: innerHTML leaves them alone, so a value placed
+// inside value="..." would otherwise end the attribute early.
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str == null ? '' : str;
-  return div.innerHTML;
+  return div.innerHTML.replace(/"/g, '&quot;');
 }
 
 function formatDate(iso) {
@@ -225,6 +236,7 @@ async function loadAll() {
   const subData = await subRes.json();
 
   state.questions = qData.questions || [];
+  state.stock = qData.stock || [];
   state.categories = sData.categories || [];
   state.dailyLimit = sData.dailyLimit || 3;
   state.submissions = subData.submissions || [];
@@ -389,6 +401,206 @@ async function deleteSubmission(id) {
   await loadAll();
 }
 
+// ---- Question generator -------------------------------------------------
+// The generator re-draws only its own slot (#gen-slot), never the whole page,
+// so typing in the notes box or the password field isn't wiped by a click on
+// a category. Counts are updated in place without any re-draw: a re-draw
+// between the mouse going down and up on "Draft questions" would swallow the
+// click.
+
+function genRender() {
+  const slot = document.getElementById('gen-slot');
+  if (slot) slot.innerHTML = genBlock();
+}
+
+function genToggle(i) {
+  const g = state.gen;
+  const cat = state.stock[i].category;
+  if (g.counts[cat] != null) delete g.counts[cat]; else g.counts[cat] = GEN_DEFAULT;
+  g.message = '';
+  g.error = '';
+  genRender();
+}
+
+// Accepts typed numbers and the - / + buttons. Out-of-range or non-numeric
+// input is corrected in place (clamped to 1..GEN_MAX, or reverted).
+function genSetCount(i, value) {
+  const cat = state.stock[i].category;
+  const n = parseInt(value, 10);
+  if (!isNaN(n)) state.gen.counts[cat] = Math.min(GEN_MAX, Math.max(1, n));
+  const input = document.getElementById('gen-count-' + i);
+  if (input) input.value = state.gen.counts[cat];
+}
+
+function genStep(i, delta) {
+  genSetCount(i, state.gen.counts[state.stock[i].category] + delta);
+}
+
+async function genDraft() {
+  const g = state.gen;
+  const requests = Object.keys(g.counts).map((category) => ({ category, count: g.counts[category] }));
+  if (!requests.length) return;
+
+  g.phase = 'busy';
+  g.busyText = 'Drafting questions…';
+  g.error = '';
+  g.message = '';
+  genRender();
+
+  let res = null;
+  let data = {};
+  try {
+    res = await fetch('/api/generate-questions', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ notes: g.notes, requests })
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (err) { /* network failure: res stays null */ }
+
+  g.phase = 'form';
+  if (!res) { g.error = "Couldn't reach the server. Check your connection and try again."; return genRender(); }
+  if (res.status === 401) {
+    g.error = 'Enter the teacher password at the top of the page first.';
+    state.authError = 'Incorrect teacher password.';
+    return render();
+  }
+  if (!res.ok) { g.error = data.error || 'Something went wrong. Try again.'; return genRender(); }
+
+  g.order = data.results.map((r) => r.category);
+  g.drafts = [];
+  g.notices = {};
+  data.results.forEach((r) => {
+    r.questions.forEach((q) => g.drafts.push({ category: r.category, text: q, keep: true }));
+    if (r.error) g.notices[r.category] = r.error;
+    else if (r.questions.length < r.requested) {
+      g.notices[r.category] = `Only ${r.questions.length} of ${r.requested} were different enough from the existing questions. Draft again for more.`;
+    }
+  });
+  g.phase = 'review';
+  genRender();
+}
+
+function genKeep(i, checked) {
+  state.gen.drafts[i].keep = checked;
+  genRender();
+}
+
+function genEdit(i, text) {
+  state.gen.drafts[i].text = text;
+}
+
+function genStartOver() {
+  state.gen.phase = 'form';
+  state.gen.drafts = [];
+  state.gen.error = '';
+  genRender();
+}
+
+async function genAdd() {
+  const g = state.gen;
+  const questions = g.drafts
+    .filter((d) => d.keep && d.text.trim())
+    .map((d) => ({ prompt: d.text.trim(), category: d.category }));
+  if (!questions.length) return;
+
+  g.phase = 'busy';
+  g.busyText = 'Adding questions…';
+  genRender();
+
+  let res = null;
+  try {
+    res = await fetch('/api/questions', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ questions }) });
+  } catch (err) { /* network failure: res stays null */ }
+
+  if (res && res.ok) {
+    g.phase = 'form';
+    g.drafts = [];
+    g.counts = {};
+    g.message = `Added ${questions.length} question${questions.length === 1 ? '' : 's'} to the pool.`;
+    return loadAll();
+  }
+  g.phase = 'review';
+  g.error = res && res.status === 401
+    ? 'Enter the teacher password at the top of the page first.'
+    : "Couldn't add the questions. Try again.";
+  if (res && res.status === 401) state.authError = 'Incorrect teacher password.';
+  genRender();
+}
+
+function genBlock() {
+  const g = state.gen;
+  if (g.phase === 'busy') {
+    return `<p class="text-muted text-sm flex items-center gap-3"><span class="w-4 h-4 border-2 border-white/10 border-t-gold rounded-full spinner"></span>${escapeHtml(g.busyText)}</p>`;
+  }
+  return g.phase === 'review' ? genReviewBlock() : genFormBlock();
+}
+
+function genFormBlock() {
+  const g = state.gen;
+  const chips = state.stock.map((s, i) => {
+    const n = g.counts[s.category];
+    const on = n != null;
+    const cat = escapeHtml(s.category);
+    return `<div class="inline-flex items-center rounded-full border text-sm ${on ? 'border-gold bg-gold/10' : 'border-white/20'}">
+      <button onclick="genToggle(${i})" class="py-1.5 pl-3.5 ${on ? 'pr-2' : 'pr-3.5'}">
+        <span class="font-medium ${on ? 'text-gold' : 'text-paper'}">${cat}</span><span class="text-muted text-xs ml-1.5">${s.remaining} left</span>
+      </button>
+      ${on ? `<span class="inline-flex items-center gap-1 pr-2">
+        <button onclick="genStep(${i}, -1)" aria-label="Fewer" class="w-5 h-5 rounded-full bg-white/10 text-xs leading-none">−</button>
+        <input id="gen-count-${i}" type="text" inputmode="numeric" value="${n}" aria-label="Number of ${cat} questions"
+          onchange="genSetCount(${i}, this.value)" onfocus="this.select()"
+          class="w-8 text-center bg-transparent text-gold font-semibold text-xs outline-none">
+        <button onclick="genStep(${i}, 1)" aria-label="More" class="w-5 h-5 rounded-full bg-white/10 text-xs leading-none">+</button>
+      </span>` : ''}
+    </div>`;
+  }).join('');
+
+  return `${g.message ? `<p class="text-gold text-sm mb-4">${escapeHtml(g.message)}</p>` : ''}
+    <div class="mb-5">
+      <label for="gen-notes" class="text-sm font-medium block mb-1">Your lesson notes</label>
+      <p class="text-muted text-xs mb-2 leading-relaxed">Paste what you taught: vocabulary, phrases, topics, grammar. Business and Scenario questions are built around this; in the other categories, about a third will invite her to use a word or grammar point from it.</p>
+      <textarea id="gen-notes" oninput="state.gen.notes = this.value" placeholder="e.g. Video-call hiccups: you're cutting out, can everyone see my screen. Vocab: consistent, stick with, not really my thing, turns out."
+        class="w-full bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-4 py-2.5 text-sm min-h-[96px]">${escapeHtml(g.notes)}</textarea>
+    </div>
+    <div class="mb-5">
+      <div class="text-sm font-medium mb-1">Categories</div>
+      <p class="text-muted text-xs mb-2 leading-relaxed">Choose where the new questions go, and how many for each: tap − / + or type a number (up to ${GEN_MAX}). The grey number is how many unanswered questions that category has left.</p>
+      <div class="flex flex-wrap gap-2">${chips}</div>
+    </div>
+    ${g.error ? `<p class="text-record text-sm mb-3">${escapeHtml(g.error)}</p>` : ''}
+    <button onclick="genDraft()" ${Object.keys(g.counts).length ? '' : 'disabled'}
+      class="bg-gold text-ink rounded-lg px-5 py-2.5 text-sm font-semibold disabled:opacity-40">Draft questions</button>`;
+}
+
+function genReviewBlock() {
+  const g = state.gen;
+  const keepCount = g.drafts.filter((d) => d.keep && d.text.trim()).length;
+
+  let html = `<p class="text-muted text-sm">Review the drafts. Untick any you don't want and edit the wording.</p>`;
+  g.order.forEach((cat) => {
+    html += `<div class="mt-5"><div class="text-gold text-xs font-semibold uppercase tracking-wider mb-1">${escapeHtml(cat)}</div>`;
+    if (g.notices[cat]) html += `<p class="text-muted text-xs mb-1">${escapeHtml(g.notices[cat])}</p>`;
+    g.drafts.forEach((d, i) => {
+      if (d.category !== cat) return;
+      html += `<div class="flex items-center gap-3 py-1.5">
+        <input type="checkbox" ${d.keep ? 'checked' : ''} onchange="genKeep(${i}, this.checked)" class="accent-gold w-4 h-4 shrink-0">
+        <input type="text" value="${escapeHtml(d.text)}" oninput="genEdit(${i}, this.value)"
+          class="flex-1 min-w-0 bg-surfaceRaised border border-white/10 focus:border-gold outline-none rounded-lg px-3 py-2 text-sm">
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  html += `${g.error ? `<p class="text-record text-sm mt-4">${escapeHtml(g.error)}</p>` : ''}
+    <div class="flex items-center gap-4 mt-6">
+      <button onclick="genAdd()" ${keepCount ? '' : 'disabled'} class="bg-gold text-ink rounded-lg px-5 py-2.5 text-sm font-semibold disabled:opacity-40">Add ${keepCount} question${keepCount === 1 ? '' : 's'}</button>
+      <button onclick="genStartOver()" class="text-muted hover:text-paper text-sm">Start over</button>
+    </div>
+    <p class="text-muted text-xs mt-4">Added questions are unanswered, so they join her question pool straight away.</p>`;
+  return html;
+}
+
 function render() {
   const app = document.getElementById('app');
 
@@ -442,6 +654,11 @@ function render() {
   }
 
   html += `</div>
+
+    <div class="border-t border-white/10 pt-8 mb-10">
+      <div class="font-serif text-xl mb-4">Create new questions</div>
+      <div id="gen-slot">${genBlock()}</div>
+    </div>
 
     <div class="border-t border-white/10 pt-8 mb-10">
       <div class="font-serif text-xl mb-4">Question sets</div>

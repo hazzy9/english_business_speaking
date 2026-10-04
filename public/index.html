@@ -545,18 +545,11 @@ function isNewFeedback(s) {
 
 // Makes markers (and New Feedback entries) vanish at the 24h mark without a
 // reload. Redrawing the whole page would cut off playing audio and reset
-// "Show more" toggles, so this removes only what expired: one timer is set
-// for the soonest expiry, deletes the expired marker tags, and rebuilds just
-// the New Feedback card if its entry count changed.
-let expiryTimer = null;
-function scheduleMarkerExpiry() {
-  clearTimeout(expiryTimer);
-  const upcoming = [...(state.newFeedback || []), ...(state.submissions || [])]
-    .map(feedbackExpiresAt).filter((t) => t > Date.now());
-  if (!upcoming.length) return;
-  expiryTimer = setTimeout(expireMarkers, Math.min(...upcoming) - Date.now() + 500);
-}
-
+// "Show more" toggles, so this only removes what expired: the marker tags,
+// and the New Feedback card if its entry count changed. It runs once a
+// minute, which is plenty precise for a 24-hour label, and costs almost
+// nothing when nothing has expired. Polling also copes with a sleeping
+// laptop, which a timer scheduled for one exact moment does not.
 function expireMarkers() {
   const now = Date.now();
   document.querySelectorAll('[data-expires]').forEach((el) => {
@@ -568,11 +561,8 @@ function expireMarkers() {
     slot.dataset.count = String(newFeedbackItems().length);
     setupClamps();
   }
-  scheduleMarkerExpiry();
 }
-
-// A laptop that slept past an expiry won't have fired its timer on time.
-document.addEventListener('visibilitychange', () => { if (!document.hidden) expireMarkers(); });
+setInterval(expireMarkers, 60 * 1000);
 
 // Reveals each "Show more" link only for transcripts that actually overflow
 // the 2-line clamp, so short answers don't get a pointless link. Runs after
@@ -758,7 +748,6 @@ function render() {
   html += historyBlock();
   app.innerHTML = html;
   setupClamps();
-  scheduleMarkerExpiry();
 }
 
 function historyBlock() {

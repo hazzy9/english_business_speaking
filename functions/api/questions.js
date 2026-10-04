@@ -75,15 +75,42 @@ export async function onRequestGet(context) {
     .prepare(`SELECT * FROM questions WHERE ${UNANSWERED} ORDER BY category, created_at DESC`)
     .all();
 
-  return Response.json({ questions: results });
+  // How many she can still be served per category. Counted over ALL rows, so a
+  // category whose questions are all answered still shows up with 0 left —
+  // exactly when the teacher needs to generate more.
+  const stock = await db
+    .prepare(
+      `SELECT category, SUM(CASE WHEN ${AVAILABLE} THEN 1 ELSE 0 END) AS remaining
+       FROM questions GROUP BY category ORDER BY category`
+    )
+    .all();
+
+  return Response.json({ questions: results, stock: stock.results });
 }
 
-// POST /api/questions  { prompt, category }  — teacher only
+// POST /api/questions  { prompt, category }            — add one question
+// POST /api/questions  { questions: [{prompt, category}, ...] }
+//                                                       — add many at once; all or nothing
+// Both teacher only.
 export async function onRequestPost(context) {
   const { request, env } = context;
   if (!isTeacherAuthed(request, env)) return unauthorized();
 
   const body = await request.json().catch(() => ({}));
+
+  if (Array.isArray(body.questions)) {
+    const items = body.questions
+      .map((q) => ({ prompt: String((q && q.prompt) || '').trim(), category: String((q && q.category) || 'General').trim() }))
+      .filter((q) => q.prompt);
+    if (!items.length || items.length > 200) {
+      return Response.json({ error: 'Send between 1 and 200 questions.' }, { status: 400 });
+    }
+    // batch() runs every statement in one transaction, so a failure adds none.
+    const insert = env.DB.prepare('INSERT INTO questions (prompt, category) VALUES (?, ?)');
+    await env.DB.batch(items.map((q) => insert.bind(q.prompt, q.category)));
+    return Response.json({ ok: true, added: items.length });
+  }
+
   const prompt = (body.prompt || '').trim();
   const category = (body.category || 'General').trim();
 
